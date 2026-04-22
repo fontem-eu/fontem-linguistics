@@ -64,3 +64,12 @@ class ModelInfoResponse(BaseModel):
 
 class ModelsResponse(BaseModel):
     models: list[ModelInfoResponse]
+
+
+class LanguageInfo(BaseModel):
+    code: str
+    name: str
+
+
+class LanguagesResponse(BaseModel):
+    languages: list[LanguageInfo]

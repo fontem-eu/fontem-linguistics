@@ -54,3 +54,14 @@ def test_translation_backends_have_null_dim():
     for m in body["models"]:
         if m["kind"] == "translation":
             assert m["dim"] is None
+
+
+def test_languages_endpoint_lists_all_24_eu_officials():
+    client = TestClient(_minimal_app())
+    r = client.get("/languages")
+    assert r.status_code == 200
+    body = r.json()
+    codes = {l["code"] for l in body["languages"]}
+    assert len(codes) == 24
+    assert {"ga", "mt", "et", "lv", "lt", "sl", "sk", "hr"}.issubset(codes)
+    assert all(l["name"] for l in body["languages"])

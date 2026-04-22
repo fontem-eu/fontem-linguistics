@@ -15,12 +15,15 @@ from src.api.schemas import (
     BatchTranslateResponse,
     EmbedRequest,
     EmbedResponse,
+    LanguageInfo,
+    LanguagesResponse,
     ModelInfoResponse,
     ModelsResponse,
     TranslateRequest,
     TranslateResponse,
 )
 from src.domain.catalog import CATALOG
+from src.domain.languages import EU_OFFICIAL_LANGS, LANG_DISPLAY_NAMES
 from src.backends.mistral import MistralError, MistralTransientError
 from src.domain.models import (
     BackendUnavailable,
@@ -151,6 +154,14 @@ async def models() -> ModelsResponse:
             cost_tier=m.cost_tier, description=m.description,
         )
         for m in CATALOG
+    ])
+
+
+@router.get("/languages", response_model=LanguagesResponse)
+async def languages() -> LanguagesResponse:
+    """Canonical list of the 24 EU official languages that callers target."""
+    return LanguagesResponse(languages=[
+        LanguageInfo(code=c, name=LANG_DISPLAY_NAMES[c]) for c in EU_OFFICIAL_LANGS
     ])
 
 

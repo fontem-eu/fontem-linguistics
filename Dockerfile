@@ -16,17 +16,14 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser && \
 
 WORKDIR /app
 
-COPY requirements.txt ./
+COPY requirements.txt requirements-ml.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ML deps (torch, transformers, sentencepiece, sentence-transformers) are
-# opt-in — install them here when the nllb-local / labse-local backends are
-# turned on. Until then the Mistral backend covers both translation and
-# embedding; keeping the image small speeds builds and cold-start.
-# COPY requirements-ml.txt ./
-# RUN pip install --no-cache-dir --index-url https://nexus.void42.internal/repository/pytorch-cpu/simple/ \
-#       --extra-index-url https://nexus.void42.internal/repository/pypi-proxy/simple/ \
-#       -r requirements-ml.txt
+# ML backends (nllb-local + labse-local). torch ships the CUDA runtime
+# even though we only use CPU — worth switching to a dedicated pytorch-cpu
+# Nexus proxy later to shrink the image, but functionally the CUDA-enabled
+# build runs fine on a pod without a GPU.
+RUN pip install --no-cache-dir -r requirements-ml.txt
 
 COPY src/ src/
 
