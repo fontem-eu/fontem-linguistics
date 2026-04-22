@@ -19,13 +19,13 @@ WORKDIR /app
 COPY requirements.txt requirements-ml.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ML backends (nllb-local + labse-local). torch from the CPU-only wheel
-# index (Nexus-proxied https://download.pytorch.org/whl/cpu) — cuts image
-# size ~1.5 GB vs. pypi's CUDA-bundled build. Rest from pypi-proxy.
-RUN pip install --no-cache-dir \
-      --index-url https://nexus.void42.internal/repository/pytorch-cpu/simple/ \
-      --extra-index-url https://nexus.void42.internal/repository/pypi-proxy/simple/ \
-      -r requirements-ml.txt
+# ML backends (nllb-local + labse-local). The torch wheel on PyPI ships with
+# the bundled CUDA runtime (~1.5 GB of nvidia-* deps) even though our pods
+# are CPU-only — functionally harmless, just image bloat. To shrink later:
+# configure a Nexus *raw* proxy for https://download.pytorch.org/whl/cpu/
+# (the pypi-format proxy doesn't understand that upstream's layout) and
+# switch `--index-url` back to it.
+RUN pip install --no-cache-dir --prefer-binary -r requirements-ml.txt
 
 COPY src/ src/
 
