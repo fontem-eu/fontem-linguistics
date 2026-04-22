@@ -19,11 +19,13 @@ WORKDIR /app
 COPY requirements.txt requirements-ml.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ML backends (nllb-local + labse-local). torch ships the CUDA runtime
-# even though we only use CPU — worth switching to a dedicated pytorch-cpu
-# Nexus proxy later to shrink the image, but functionally the CUDA-enabled
-# build runs fine on a pod without a GPU.
-RUN pip install --no-cache-dir -r requirements-ml.txt
+# ML backends (nllb-local + labse-local). torch from the CPU-only wheel
+# index (Nexus-proxied https://download.pytorch.org/whl/cpu) — cuts image
+# size ~1.5 GB vs. pypi's CUDA-bundled build. Rest from pypi-proxy.
+RUN pip install --no-cache-dir \
+      --index-url https://nexus.void42.internal/repository/pytorch-cpu/simple/ \
+      --extra-index-url https://nexus.void42.internal/repository/pypi-proxy/simple/ \
+      -r requirements-ml.txt
 
 COPY src/ src/
 
