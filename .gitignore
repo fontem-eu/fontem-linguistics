@@ -8,6 +8,7 @@ coverage.xml
 test-results.xml
 pylint-report.txt
 sbom.json
+.scannerwork/
 .venv/
 venv/
 .env
