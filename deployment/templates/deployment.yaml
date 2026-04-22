@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gmr-linguistics
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.replicas | default 1 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: gmr-linguistics
+  template:
+    metadata:
+      labels:
+        app: gmr-linguistics
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: gmr-linguistics-models
+      containers:
+        - name: api
+          image: contribute.void42.internal/golden/gmr-linguistics:{{ .Values.version }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gmr-linguistics-pg-credentials
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: {{ .Values.databaseUrl | quote }}
+            - name: MISTRAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gmr-mistral-credentials
+                  key: MISTRAL_API_KEY
+            - name: MISTRAL_API_URL
+              value: {{ .Values.mistralApiUrl | quote }}
+            - name: SPEND_CAP_USD_DAILY
+              value: {{ .Values.spendCapUsdDaily | quote }}
+            - name: BREAKER_FAILURE_THRESHOLD
+              value: {{ .Values.breakerFailureThreshold | quote }}
+            - name: BREAKER_WINDOW_S
+              value: {{ .Values.breakerWindowS | quote }}
+            - name: BREAKER_COOLDOWN_S
+              value: {{ .Values.breakerCooldownS | quote }}
+            - name: BREAKER_MIN_REQUESTS
+              value: {{ .Values.breakerMinRequests | quote }}
+            - name: NLLB_MODEL
+              value: {{ .Values.nllbModel | quote }}
+            - name: LABSE_MODEL
+              value: {{ .Values.labseModel | quote }}
+            - name: LOCAL_MODELS_PATH
+              value: {{ .Values.localModelsPath | quote }}
+            - name: INPROCESS_LRU_SIZE
+              value: {{ .Values.inprocessLruSize | quote }}
+          volumeMounts:
+            - name: models
+              mountPath: {{ .Values.localModelsPath | quote }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gmr-linguistics-models
+  namespace: {{ .Release.Namespace }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.modelsVolumeSize | default "10Gi" }}

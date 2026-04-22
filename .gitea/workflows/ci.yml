@@ -1,0 +1,87 @@
+name: CI/CD
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: python
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        env:
+          PIP_INDEX_URL: https://nexus.void42.internal/repository/pypi-proxy/simple/
+          PIP_TRUSTED_HOST: nexus.void42.internal
+        run: pip install --no-cache-dir -r requirements.txt pytest pylint pytest-cov bandit pip-audit
+      - name: Unit + component tests with 90% coverage gate
+        run: python3 -m pytest tests/unit tests/component -q --cov=src --cov-report=xml:coverage.xml --cov-config=.coveragerc --cov-fail-under=90
+      - name: Integration tests (Docker for testcontainers)
+        run: python3 -m pytest tests/integration -q
+      - name: Lint
+        run: python3 -m pylint src tests --output-format=parseable --reports=no 2>&1 | tail -1 || true
+      - name: Security audit
+        run: |
+          pip-audit -r requirements.txt --desc 2>&1 || true
+          python3 -m bandit -r src -q || true
+
+  analyze:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: python
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps and generate coverage
+        env:
+          PIP_INDEX_URL: https://nexus.void42.internal/repository/pypi-proxy/simple/
+          PIP_TRUSTED_HOST: nexus.void42.internal
+        run: |
+          pip install --no-cache-dir -r requirements.txt pytest pytest-cov cyclonedx-bom
+          python3 -m pytest tests/unit tests/component -q --cov=src --cov-report=xml:coverage.xml --cov-config=.coveragerc || true
+      - name: SonarQube scan
+        run: npx sonarqube-scanner -Dsonar.host.url=http://sonarqube.sonarqube.svc.cluster.local:9000 -Dsonar.token=${{ secrets.SONAR_TOKEN }}
+      - name: Generate SBOM
+        run: cyclonedx-py requirements requirements.txt --of json -o sbom.json
+      - name: Upload SBOM to Dependency-Track
+        run: |
+          curl -fsS -X POST "http://dependency-track.dependency-track.svc.cluster.local:8080/api/v1/bom" \
+            -H "X-Api-Key: ${{ secrets.DTRACK_API_KEY }}" \
+            -H "Content-Type: multipart/form-data" \
+            -F "projectName=gmr-linguistics" -F "projectVersion=$(git rev-parse --short HEAD)" \
+            -F "autoCreate=true" -F "bom=@sbom.json"
+
+  build-deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Docker
+        run: curl -fsSL https://nexus.void42.internal/repository/docker-releases/linux/static/stable/x86_64/docker-27.5.1.tgz | tar xz --strip-components=1 -C /usr/local/bin docker/docker
+      - name: Build and push image
+        run: |
+          TAG="v$(git rev-parse --short HEAD)"
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login gitea-http.dev-tools.svc.cluster.local:3000 -u "${{ secrets.REGISTRY_USER }}" --password-stdin
+          docker build --network host -t gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-linguistics:$TAG .
+          docker push gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-linguistics:$TAG
+      - name: Sign image with Cosign
+        env:
+          COSIGN_PASSWORD: ""
+          COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
+        run: |
+          curl -sL https://nexus.void42.internal/repository/github-releases/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 -o /usr/local/bin/cosign
+          chmod +x /usr/local/bin/cosign
+          echo "$COSIGN_KEY" > /tmp/cosign.key
+          cosign sign --key /tmp/cosign.key --yes --allow-http-registry gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-linguistics:$TAG
+          rm /tmp/cosign.key
+      - name: Deploy to staging (dev)
+        run: |
+          git clone --depth=1 http://oauth2:${{ secrets.REGISTRY_PASSWORD }}@gitea-http.dev-tools.svc.cluster.local:3000/golden/gitops.git /tmp/gitops
+          cd /tmp/gitops
+          sed -i 's/version: ".*"/version: "'$TAG'"/' staging/gmr-linguistics.yaml
+          git config user.name "GMR CI"
+          git config user.email "ci@void42.internal"
+          git add staging/gmr-linguistics.yaml
+          git diff --cached --quiet || git commit -m "ci: deploy gmr-linguistics $TAG to staging"
+          git push origin main

@@ -1,0 +1,4 @@
+apiVersion: v1
+name: gmr-linguistics
+version: 1.0.0
+description: Translation + embedding service — durable cache, Mistral + NLLB/LaBSE backends

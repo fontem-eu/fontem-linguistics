@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.coverage
+coverage.xml
+test-results.xml
+pylint-report.txt
+sbom.json
+.venv/
+venv/
+.env
+models/

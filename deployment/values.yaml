@@ -1,0 +1,21 @@
+version: "dev"
+databaseUrl: "postgresql+asyncpg://linguistics:$(POSTGRES_PASSWORD)@postgresql:5432/linguistics"
+mistralApiUrl: "https://api.mistral.ai/v1"
+spendCapUsdDaily: "50.0"
+breakerFailureThreshold: "0.05"
+breakerWindowS: "60"
+breakerCooldownS: "30"
+breakerMinRequests: "20"
+nllbModel: "facebook/nllb-200-distilled-600M"
+labseModel: "sentence-transformers/LaBSE"
+localModelsPath: "/models"
+inprocessLruSize: "4096"
+modelsVolumeSize: "10Gi"
+replicas: 1
+resources:
+  requests:
+    memory: "1Gi"
+    cpu: "500m"
+  limits:
+    memory: "6Gi"
+    cpu: "2"

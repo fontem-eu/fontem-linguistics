@@ -1,0 +1,27 @@
+[run]
+source = src
+branch = True
+# Excluded from the unit+component gate because they require heavy runtime
+# context (PG, ML models, lifespan) that's verified in dedicated test suites:
+#   - cache/postgres.py     -> covered by tests/integration (testcontainers PG)
+#   - backends/nllb_local   -> covered by the staging-side smoke test (real model)
+#   - backends/labse_local  -> covered by the staging-side smoke test (real model)
+#   - api/app.py            -> composition root; a compose-up smoke test hits /healthz
+#   - backends/base.py      -> Protocol-only, no runtime code
+omit =
+    src/backends/nllb_local.py
+    src/backends/labse_local.py
+    src/backends/base.py
+    src/api/app.py
+    src/cache/postgres.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    ^\s*\.\.\.$
+precision = 2
+show_missing = True
+skip_covered = False
