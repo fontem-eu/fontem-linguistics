@@ -16,11 +16,17 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser && \
 
 WORKDIR /app
 
-COPY requirements.txt requirements-ml.txt ./
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir --index-url https://nexus.void42.internal/repository/pytorch-cpu/simple/ \
-        --extra-index-url https://nexus.void42.internal/repository/pypi-proxy/simple/ \
-        -r requirements-ml.txt || pip install --no-cache-dir -r requirements-ml.txt
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# ML deps (torch, transformers, sentencepiece, sentence-transformers) are
+# opt-in — install them here when the nllb-local / labse-local backends are
+# turned on. Until then the Mistral backend covers both translation and
+# embedding; keeping the image small speeds builds and cold-start.
+# COPY requirements-ml.txt ./
+# RUN pip install --no-cache-dir --index-url https://nexus.void42.internal/repository/pytorch-cpu/simple/ \
+#       --extra-index-url https://nexus.void42.internal/repository/pypi-proxy/simple/ \
+#       -r requirements-ml.txt
 
 COPY src/ src/
 
