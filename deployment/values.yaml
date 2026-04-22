@@ -1,6 +1,8 @@
 version: "dev"
 databaseUrl: "postgresql+asyncpg://linguistics:$(POSTGRES_PASSWORD)@postgresql:5432/linguistics"
 mistralApiUrl: "https://api.mistral.ai/v1"
+mistralChatModel: "mistral-medium-latest"
+mistralEmbedModel: "mistral-embed"
 spendCapUsdDaily: "50.0"
 breakerFailureThreshold: "0.05"
 breakerWindowS: "60"

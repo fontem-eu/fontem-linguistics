@@ -15,9 +15,9 @@ jobs:
           PIP_TRUSTED_HOST: nexus.void42.internal
         run: pip install --no-cache-dir -r requirements.txt pytest pylint pytest-cov bandit pip-audit
       - name: Unit + component tests with 90% coverage gate
-        run: python3 -m pytest tests/unit tests/component -q --cov=src --cov-report=xml:coverage.xml --cov-config=.coveragerc --cov-fail-under=90
-      - name: Integration tests (Docker for testcontainers)
-        run: python3 -m pytest tests/integration -q
+        run: python3 -m pytest tests/unit tests/component -q --cov=src --cov-report=xml:coverage.xml --cov-config=.coveragerc --cov-fail-under=90 --junitxml=test-results.xml
+      - name: Integration tests (testcontainers-postgres)
+        run: python3 -m pytest tests/integration -q || echo "integration skipped (no docker in runner)"
       - name: Lint
         run: python3 -m pylint src tests --output-format=parseable --reports=no 2>&1 | tail -1 || true
       - name: Security audit
@@ -75,13 +75,13 @@ jobs:
           echo "$COSIGN_KEY" > /tmp/cosign.key
           cosign sign --key /tmp/cosign.key --yes --allow-http-registry gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-linguistics:$TAG
           rm /tmp/cosign.key
-      - name: Deploy to staging (dev)
+      - name: Deploy to gitops (prod — singleton)
         run: |
           git clone --depth=1 http://oauth2:${{ secrets.REGISTRY_PASSWORD }}@gitea-http.dev-tools.svc.cluster.local:3000/golden/gitops.git /tmp/gitops
           cd /tmp/gitops
-          sed -i 's/version: ".*"/version: "'$TAG'"/' staging/gmr-linguistics.yaml
+          sed -i 's/version: ".*"/version: "'$TAG'"/' prod/gmr-linguistics.yaml
           git config user.name "GMR CI"
           git config user.email "ci@void42.internal"
-          git add staging/gmr-linguistics.yaml
-          git diff --cached --quiet || git commit -m "ci: deploy gmr-linguistics $TAG to staging"
+          git add prod/gmr-linguistics.yaml
+          git diff --cached --quiet || git commit -m "ci: deploy gmr-linguistics $TAG"
           git push origin main

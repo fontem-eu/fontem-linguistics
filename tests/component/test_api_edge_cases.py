@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.deps import Services
-from src.api.routes import router as api_router, _IDEMPOTENCY_STORE, _IDEMPOTENCY_MAX
+from src.api.routes import router as api_router, _IDEMPOTENCY_STORE
 from src.backends.mistral import MistralBackend
 from src.infra.circuit_breaker import CircuitBreaker
 from src.infra.spend_cap import SpendCap

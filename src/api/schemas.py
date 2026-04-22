@@ -50,3 +50,17 @@ class EmbedResponse(BaseModel):
 class ErrorResponse(BaseModel):
     detail: str
     code: str | None = None
+
+
+class ModelInfoResponse(BaseModel):
+    backend: str
+    kind: str
+    quality_score: float
+    dim: int | None
+    languages_supported: int
+    cost_tier: str
+    description: str
+
+
+class ModelsResponse(BaseModel):
+    models: list[ModelInfoResponse]

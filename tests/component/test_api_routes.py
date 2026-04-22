@@ -1,7 +1,6 @@
 """Component tests: real FastAPI app wired with in-memory cache + Mistral stub."""
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 
 import httpx
@@ -11,7 +10,6 @@ from fastapi.testclient import TestClient
 from src.api.deps import Services
 from src.api.routes import router as api_router, _IDEMPOTENCY_STORE
 from src.backends.mistral import MistralBackend
-from src.domain.models import TranslationBackend, EmbeddingBackend
 from src.infra.circuit_breaker import CircuitBreaker
 from src.infra.spend_cap import SpendCap
 from src.services.embedding import EmbeddingService

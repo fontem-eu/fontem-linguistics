@@ -15,15 +15,17 @@ from src.api.schemas import (
     BatchTranslateResponse,
     EmbedRequest,
     EmbedResponse,
+    ModelInfoResponse,
+    ModelsResponse,
     TranslateRequest,
     TranslateResponse,
 )
+from src.domain.catalog import CATALOG
 from src.backends.mistral import MistralError, MistralTransientError
 from src.domain.models import (
     BackendUnavailable,
     CircuitOpen,
     SpendCapExceeded,
-    TranslationBackend,
 )
 
 router = APIRouter()
@@ -96,7 +98,7 @@ async def translate_batch(
                 translations=result.translations,
                 partial_cached_targets=sorted(result.cached_targets),
             )
-        except CircuitOpen as exc:
+        except CircuitOpen:
             # Surface per-item: batch partial completion is acceptable. Return
             # an empty translations dict and let the caller retry the failed
             # items. Simpler than aborting the whole batch.
@@ -137,6 +139,19 @@ async def embed(req: EmbedRequest, request: Request) -> EmbedResponse:
     return EmbedResponse(
         cached=result.cached, backend=result.backend, dim=result.dim, vector=result.vector,
     )
+
+
+@router.get("/models", response_model=ModelsResponse)
+async def models() -> ModelsResponse:
+    """List available backends with quality scores. Callers use this to pick a tier."""
+    return ModelsResponse(models=[
+        ModelInfoResponse(
+            backend=m.backend, kind=m.kind, quality_score=m.quality_score,
+            dim=m.dim, languages_supported=m.languages_supported,
+            cost_tier=m.cost_tier, description=m.description,
+        )
+        for m in CATALOG
+    ])
 
 
 @router.get("/healthz")

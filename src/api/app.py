@@ -1,7 +1,6 @@
 """FastAPI app factory + lifespan."""
 from __future__ import annotations
 
-import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -29,7 +28,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         dsn=_asyncpg_dsn(settings.database_url),
         lru_size=settings.inprocess_lru_size,
     )
-    await _ensure_schema(cache, settings.tablespace)
+    await _ensure_schema(cache)
     app.state.cache = cache
 
     mistral: MistralBackend | None = None
@@ -88,10 +87,10 @@ def _asyncpg_dsn(url: str) -> str:
     return url
 
 
-async def _ensure_schema(cache: PostgresCache, tablespace: str) -> None:
+async def _ensure_schema(cache: PostgresCache) -> None:
     """Create tables on first startup. Tablespace assumed pre-provisioned at DB level."""
     async with cache.pool.acquire() as con:
-        await con.execute(f"""
+        await con.execute("""
             CREATE TABLE IF NOT EXISTS translations (
                 source_hash   BYTEA       NOT NULL,
                 source_text   TEXT        NOT NULL,
@@ -107,7 +106,7 @@ async def _ensure_schema(cache: PostgresCache, tablespace: str) -> None:
         await con.execute(
             "CREATE INDEX IF NOT EXISTS translations_backend_idx ON translations (backend)"
         )
-        await con.execute(f"""
+        await con.execute("""
             CREATE TABLE IF NOT EXISTS embeddings (
                 source_hash   BYTEA       NOT NULL,
                 source_text   TEXT        NOT NULL,

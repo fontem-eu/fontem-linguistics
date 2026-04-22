@@ -40,10 +40,14 @@ spec:
             - name: MISTRAL_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: gmr-mistral-credentials
-                  key: MISTRAL_API_KEY
+                  name: gmr-linguistics-mistral-credentials
+                  key: api-key
             - name: MISTRAL_API_URL
               value: {{ .Values.mistralApiUrl | quote }}
+            - name: MISTRAL_CHAT_MODEL
+              value: {{ .Values.mistralChatModel | quote }}
+            - name: MISTRAL_EMBED_MODEL
+              value: {{ .Values.mistralEmbedModel | quote }}
             - name: SPEND_CAP_USD_DAILY
               value: {{ .Values.spendCapUsdDaily | quote }}
             - name: BREAKER_FAILURE_THRESHOLD
