@@ -18,6 +18,11 @@ resources:
   requests:
     memory: "1Gi"
     cpu: "500m"
+  # Peak during first cold load (fp32 weights downloaded + int8 copy
+  # held briefly before GC) reaches ~5 GB on NLLB-600M and spikes again
+  # when LaBSE loads next. 6 Gi was hitting OOMKilled; 8 Gi leaves
+  # enough headroom during the load window. Steady-state after both
+  # models are quantised is ~2 GB so the request stays low.
   limits:
-    memory: "6Gi"
+    memory: "8Gi"
     cpu: "2"

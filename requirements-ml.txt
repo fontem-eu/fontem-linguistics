@@ -2,3 +2,7 @@ torch>=2.3
 transformers>=4.44
 sentencepiece>=0.2
 sentence-transformers>=3.0
+# `accelerate` backs transformers' low_cpu_mem_usage=True path — lets
+# `from_pretrained` stream weights straight into the final dtype rather
+# than materialising a temporary fp32 copy. Halves peak load memory.
+accelerate>=0.30
