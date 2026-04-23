@@ -35,6 +35,7 @@ class LabseLocalBackend:
             loop = asyncio.get_running_loop()
 
             def _load_and_quantise():
+                import gc  # pylint: disable=import-outside-toplevel
                 model = SentenceTransformer(
                     self.model_name, cache_folder=self.local_path,
                 )
@@ -42,10 +43,14 @@ class LabseLocalBackend:
                 if self.quantize:
                     # SentenceTransformer wraps a plain HF transformer —
                     # dynamic int8 on nn.Linear is safe; the pooling +
-                    # normalise ops stay fp32.
-                    model = torch.quantization.quantize_dynamic(
+                    # normalise ops stay fp32. Drop the fp32 copy
+                    # explicitly to shrink the load-time memory spike.
+                    quantised = torch.quantization.quantize_dynamic(
                         model, {torch.nn.Linear}, dtype=torch.qint8,
                     )
+                    del model
+                    gc.collect()
+                    return quantised
                 return model
 
             model = await loop.run_in_executor(None, _load_and_quantise)

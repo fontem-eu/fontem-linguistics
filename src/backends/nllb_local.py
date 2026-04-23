@@ -68,9 +68,14 @@ class NllbLocalBackend:
             )
 
             def _load_and_quantise():
+                import gc  # pylint: disable=import-outside-toplevel
+                # low_cpu_mem_usage=True uses `accelerate`'s streaming
+                # load which avoids materialising a second fp32 copy
+                # during `from_pretrained`. Halves the load-time peak.
                 model = AutoModelForSeq2SeqLM.from_pretrained(
                     self.model_name, cache_dir=self.local_path,
                     revision=self.model_revision,
+                    low_cpu_mem_usage=True,
                 )
                 model.eval()
                 if self.quantize:
@@ -78,9 +83,15 @@ class NllbLocalBackend:
                     # embeddings + layer-norms stay fp32 (not in the set).
                     # Torch does the cast at op-time (dynamic), so there's
                     # no calibration step to worry about.
-                    model = torch.quantization.quantize_dynamic(
+                    # quantize_dynamic returns a NEW module; drop the
+                    # fp32 copy explicitly so the kubelet doesn't OOM us
+                    # during the load-time memory spike.
+                    quantised = torch.quantization.quantize_dynamic(
                         model, {torch.nn.Linear}, dtype=torch.qint8,
                     )
+                    del model
+                    gc.collect()
+                    return quantised
                 return model
 
             model = await loop.run_in_executor(None, _load_and_quantise)
