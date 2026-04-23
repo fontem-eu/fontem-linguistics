@@ -18,11 +18,11 @@ resources:
   requests:
     memory: "1Gi"
     cpu: "500m"
-  # Peak during first cold load (fp32 weights downloaded + int8 copy
-  # held briefly before GC) reaches ~5 GB on NLLB-600M and spikes again
-  # when LaBSE loads next. 6 Gi was hitting OOMKilled; 8 Gi leaves
-  # enough headroom during the load window. Steady-state after both
-  # models are quantised is ~2 GB so the request stays low.
+  # Peak during first cold load + quantise runs ~6-9 GB on NLLB-600M
+  # (fp32 weights from `from_pretrained` + quantize_dynamic scratch
+  # held briefly before GC finalises). 12 Gi gives ~30% headroom on
+  # observed peak. Steady-state after both models are quantised is
+  # ~2 GB resident, so the 1 Gi request keeps the scheduler honest.
   limits:
-    memory: "8Gi"
+    memory: "12Gi"
     cpu: "2"

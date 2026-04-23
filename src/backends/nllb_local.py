@@ -69,13 +69,14 @@ class NllbLocalBackend:
 
             def _load_and_quantise():
                 import gc  # pylint: disable=import-outside-toplevel
-                # low_cpu_mem_usage=True uses `accelerate`'s streaming
-                # load which avoids materialising a second fp32 copy
-                # during `from_pretrained`. Halves the load-time peak.
+                # Tried `low_cpu_mem_usage=True` (via accelerate) to shrink
+                # the load-time peak — the dispatch-hook machinery it
+                # adds actually pushes the transient footprint higher on
+                # this torch/transformers combo (observed pod OOMs in
+                # prod even at 8 Gi). Plain from_pretrained it is.
                 model = AutoModelForSeq2SeqLM.from_pretrained(
                     self.model_name, cache_dir=self.local_path,
                     revision=self.model_revision,
-                    low_cpu_mem_usage=True,
                 )
                 model.eval()
                 if self.quantize:
