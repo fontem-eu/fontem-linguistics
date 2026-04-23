@@ -43,10 +43,16 @@ class Settings(BaseSettings):
     nllb_model: str = Field(default="facebook/nllb-200-distilled-600M")
     labse_model: str = Field(default="sentence-transformers/LaBSE")
     local_models_path: str = Field(default="/models")
-    # Dynamic int8 quantisation on nn.Linear layers. Default on — cuts
-    # resident memory ~4x. Flip off to compare translation quality /
-    # embedding similarity against the fp32 baseline.
-    local_quantize_int8: bool = Field(default=True)
+    # Dynamic int8 quantisation on nn.Linear layers. Intuition says this
+    # should shrink the resident footprint; in practice, measured on
+    # torch 2.11 + transformers 5.5, eager-mode `quantize_dynamic` on
+    # NLLB-200 allocates per-layer scale + zero-point tensors AND keeps
+    # the fp32 state alive long enough that total RSS goes UP (0.84 GB
+    # fp32 → ~3.4 GB quantised, observed in prod pod). Default off.
+    # Leave the toggle in place so we can re-enable once we migrate to
+    # torchao's int8_weight_only (the non-deprecated API) and confirm
+    # the savings there.
+    local_quantize_int8: bool = Field(default=False)
 
     # LRU
     inprocess_lru_size: int = Field(default=1024)

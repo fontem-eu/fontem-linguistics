@@ -18,11 +18,10 @@ resources:
   requests:
     memory: "1Gi"
     cpu: "500m"
-  # Peak during first cold load + quantise runs ~6-9 GB on NLLB-600M
-  # (fp32 weights from `from_pretrained` + quantize_dynamic scratch
-  # held briefly before GC finalises). 12 Gi gives ~30% headroom on
-  # observed peak. Steady-state after both models are quantised is
-  # ~2 GB resident, so the 1 Gi request keeps the scheduler honest.
+  # Fp32 steady-state with both models loaded is ~2.5 GB resident
+  # (NLLB ~0.84 GB + LaBSE ~0.7 GB + Python/FastAPI baseline ~0.7 GB +
+  # activations). 6 Gi gives >2x headroom for any inference spikes.
+  # Quantisation was a dead-end on this torch (see config comment).
   limits:
-    memory: "12Gi"
+    memory: "6Gi"
     cpu: "2"

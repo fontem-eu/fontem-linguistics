@@ -21,17 +21,17 @@ def test_settings_reads_env(monkeypatch):
     assert s.mistral_chat_model == "mistral-large-latest"
 
 
-def test_local_quantize_int8_default_on():
-    # Cluster runs tight on RAM — quantisation must be on by default so a
-    # pod with both models hot stays below ~3 GB resident. Regressions
-    # here would silently push memory back to fp32 (~5.6 GB combined).
+def test_local_quantize_int8_default_off():
+    # Counter-intuitive but measured: eager-mode `quantize_dynamic` on
+    # NLLB-200 on our torch 2.11 / transformers 5.5 stack grows RSS
+    # (fp32 0.84 GB → ~3.4 GB quantised). Default off; fp32 is smaller.
     from src.infra.config import Settings
     s = Settings(_env_file=None)
-    assert s.local_quantize_int8 is True
+    assert s.local_quantize_int8 is False
 
 
 def test_local_quantize_int8_overridable(monkeypatch):
     from src.infra.config import Settings
-    monkeypatch.setenv("LOCAL_QUANTIZE_INT8", "false")
+    monkeypatch.setenv("LOCAL_QUANTIZE_INT8", "true")
     s = Settings(_env_file=None)
-    assert s.local_quantize_int8 is False
+    assert s.local_quantize_int8 is True
