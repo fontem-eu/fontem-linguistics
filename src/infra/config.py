@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     nllb_model: str = Field(default="facebook/nllb-200-distilled-600M")
     labse_model: str = Field(default="sentence-transformers/LaBSE")
     local_models_path: str = Field(default="/models")
+    # Dynamic int8 quantisation on nn.Linear layers. Default on — cuts
+    # resident memory ~4x. Flip off to compare translation quality /
+    # embedding similarity against the fp32 baseline.
+    local_quantize_int8: bool = Field(default=True)
 
     # LRU
     inprocess_lru_size: int = Field(default=1024)
