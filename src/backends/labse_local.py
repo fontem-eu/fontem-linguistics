@@ -11,6 +11,10 @@ from src.domain.models import BackendUnavailable
 class LabseLocalBackend:
     model_name: str
     local_path: str
+    # Dynamic int8 quantisation on the transformer's nn.Linear layers.
+    # LaBSE is ~471M params — fp32 ≈ 1.9 GB resident, int8 ≈ 0.5 GB on
+    # the weights, minimal accuracy drop for sentence-similarity use.
+    quantize: bool = True
     _model: object | None = None
     _loaded: bool = False
     _load_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -22,17 +26,29 @@ class LabseLocalBackend:
             if self._loaded:
                 return
             try:
+                import torch  # pylint: disable=import-outside-toplevel
                 from sentence_transformers import SentenceTransformer
             except ImportError as exc:
                 raise BackendUnavailable(
-                    f"labse-local: sentence-transformers not installed ({exc})"
+                    f"labse-local: sentence-transformers/torch not installed ({exc})"
                 ) from exc
             loop = asyncio.get_running_loop()
-            model = await loop.run_in_executor(
-                None, lambda: SentenceTransformer(
-                    self.model_name, cache_folder=self.local_path
-                ),
-            )
+
+            def _load_and_quantise():
+                model = SentenceTransformer(
+                    self.model_name, cache_folder=self.local_path,
+                )
+                model.eval()
+                if self.quantize:
+                    # SentenceTransformer wraps a plain HF transformer —
+                    # dynamic int8 on nn.Linear is safe; the pooling +
+                    # normalise ops stay fp32.
+                    model = torch.quantization.quantize_dynamic(
+                        model, {torch.nn.Linear}, dtype=torch.qint8,
+                    )
+                return model
+
+            model = await loop.run_in_executor(None, _load_and_quantise)
             self._model = model
             self._loaded = True
 

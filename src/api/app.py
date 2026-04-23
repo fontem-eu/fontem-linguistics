@@ -46,10 +46,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
 
     nllb = NllbLocalBackend(
-        model_name=settings.nllb_model, local_path=settings.local_models_path,
+        model_name=settings.nllb_model,
+        local_path=settings.local_models_path,
+        quantize=settings.local_quantize_int8,
     )
     labse = LabseLocalBackend(
-        model_name=settings.labse_model, local_path=settings.local_models_path,
+        model_name=settings.labse_model,
+        local_path=settings.local_models_path,
+        quantize=settings.local_quantize_int8,
     )
 
     breaker = CircuitBreaker(

@@ -35,6 +35,12 @@ class NllbLocalBackend:
     # Pinning revisions is supply-chain hygiene: without this, transformers
     # pulls whatever "main" points to on HF Hub, which can silently change.
     model_revision: str = "main"
+    # Dynamic int8 quantisation on Linear layers — cuts resident memory
+    # roughly 4x on the weights (~2.4 GB fp32 → ~0.7 GB int8 for NLLB-600M),
+    # at a small throughput cost on CPU. We run CPU-only anyway; latency
+    # isn't the binding constraint. Flip to False via env to debug quality
+    # regressions against the fp32 baseline.
+    quantize: bool = True
     _tokenizer: object | None = None
     _model: object | None = None
     _loaded: bool = False
@@ -47,10 +53,11 @@ class NllbLocalBackend:
             if self._loaded:
                 return
             try:
+                import torch  # pylint: disable=import-outside-toplevel
                 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
             except ImportError as exc:
                 raise BackendUnavailable(
-                    f"nllb-local: transformers not installed ({exc})"
+                    f"nllb-local: transformers/torch not installed ({exc})"
                 ) from exc
             loop = asyncio.get_running_loop()
             tok = await loop.run_in_executor(
@@ -59,12 +66,24 @@ class NllbLocalBackend:
                     revision=self.model_revision,
                 ),
             )
-            model = await loop.run_in_executor(
-                None, lambda: AutoModelForSeq2SeqLM.from_pretrained(
+
+            def _load_and_quantise():
+                model = AutoModelForSeq2SeqLM.from_pretrained(
                     self.model_name, cache_dir=self.local_path,
                     revision=self.model_revision,
-                ),
-            )
+                )
+                model.eval()
+                if self.quantize:
+                    # qint8 on nn.Linear is the only safe target on CPU —
+                    # embeddings + layer-norms stay fp32 (not in the set).
+                    # Torch does the cast at op-time (dynamic), so there's
+                    # no calibration step to worry about.
+                    model = torch.quantization.quantize_dynamic(
+                        model, {torch.nn.Linear}, dtype=torch.qint8,
+                    )
+                return model
+
+            model = await loop.run_in_executor(None, _load_and_quantise)
             self._tokenizer = tok
             self._model = model
             self._loaded = True
