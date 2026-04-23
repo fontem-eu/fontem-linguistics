@@ -42,6 +42,17 @@ spec:
                 secretKeyRef:
                   name: gmr-linguistics-mistral-credentials
                   key: api-key
+            # HuggingFace Hub token — lifts the anonymous rate limit
+            # for NLLB + LaBSE model downloads on first use of the
+            # nllb-local / labse-local backends. Without this, a cold
+            # pod serves the first local-model request over ~20-40
+            # minutes (seen in prod); with it, ~1-3 minutes.
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gmr-linguistics-huggingface-credentials
+                  key: token
+                  optional: true
             - name: MISTRAL_API_URL
               value: {{ .Values.mistralApiUrl | quote }}
             - name: MISTRAL_CHAT_MODEL
