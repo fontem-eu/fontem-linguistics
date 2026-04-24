@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gmr-linguistics-cosign-pubkey
+  namespace: {{ .Release.Namespace }}
+data:
+  # Public half of the Cosign key pair that signs our app images and
+  # model artifacts. Same key as in:
+  #   gitops/cluster-policies/verify-image-signatures.yaml
+  #   gitops/cluster-policies/verify-model-artifacts.yaml
+  # Mounted read-only into the mirror-pull initContainer so it can
+  # verify the signature before unpacking the LaBSE artifact.
+  cosign.pub: |
+    -----BEGIN PUBLIC KEY-----
+    MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEj9urMuEuuhftoafahU7eyGZgrInC
+    9CMYczU6wu4jUyZG//O4YCD7nQpBtWZ1csGRAutMneWgKzppBh48FH4K4g==
+    -----END PUBLIC KEY-----

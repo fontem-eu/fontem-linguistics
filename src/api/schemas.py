@@ -45,6 +45,8 @@ class EmbedResponse(BaseModel):
     backend: EmbeddingBackend
     dim: int
     vector: list[float]
+    # Signed-mirror identity of the encoder. See EmbeddingResult.encoder_id.
+    encoder_id: str
 
 
 class ErrorResponse(BaseModel):
@@ -60,6 +62,8 @@ class ModelInfoResponse(BaseModel):
     languages_supported: int
     cost_tier: str
     description: str
+    # encoder_id is only meaningful for embedders; None for translators.
+    encoder_id: str | None = None
 
 
 class ModelsResponse(BaseModel):

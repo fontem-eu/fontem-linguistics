@@ -24,6 +24,58 @@ spec:
         - name: models
           persistentVolumeClaim:
             claimName: gmr-linguistics-models
+        # Cosign public key — same key that signs app images. Mounted
+        # read-only into the mirror-pull initContainer so signature
+        # verification can happen before we unpack anything.
+        - name: cosign-pubkey
+          configMap:
+            name: gmr-linguistics-cosign-pubkey
+      # mirror-pull populates /models/labse-<version> from the signed
+      # OCI artifact at labseMirrorRef:labseMirrorVersion. Runs every
+      # pod start, but no-ops when the target directory already exists
+      # on the PVC — k8s restarts stay fast.
+      initContainers:
+        - name: mirror-pull
+          image: alpine:3.19
+          env:
+            - name: MIRROR_REF
+              value: {{ .Values.labseMirrorRef | quote }}
+            - name: MIRROR_VERSION
+              value: {{ .Values.labseMirrorVersion | quote }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              DEST="/models/labse-${MIRROR_VERSION}"
+              REF="${MIRROR_REF}:${MIRROR_VERSION}"
+              if [ -f "${DEST}/config.json" ] || [ -f "${DEST}/modules.json" ]; then
+                echo "mirror-pull: ${DEST} already populated; skipping"
+                exit 0
+              fi
+              apk add --no-cache curl ca-certificates tar >/dev/null
+              mkdir -p /tmp/bin
+              echo "mirror-pull: fetching oras + cosign from Nexus..."
+              curl -fsSL https://nexus.void42.internal/repository/github-releases/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
+                | tar xz -C /tmp/bin oras
+              curl -fsSL https://nexus.void42.internal/repository/github-releases/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 \
+                -o /tmp/bin/cosign
+              chmod +x /tmp/bin/oras /tmp/bin/cosign
+              echo "mirror-pull: verifying signature on ${REF}..."
+              /tmp/bin/cosign verify \
+                --key /etc/cosign/cosign.pub \
+                --allow-http-registry --insecure-ignore-tlog \
+                "${REF}"
+              echo "mirror-pull: pulling artifact..."
+              mkdir -p /tmp/artifact "${DEST}"
+              /tmp/bin/oras pull --plain-http "${REF}" -o /tmp/artifact
+              tar -xzf /tmp/artifact/labse.tar.gz -C "${DEST}"
+              echo "mirror-pull: done at ${DEST}"
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: cosign-pubkey
+              mountPath: /etc/cosign
+              readOnly: true
       containers:
         - name: api
           image: contribute.void42.internal/golden/gmr-linguistics:{{ .Values.version }}
@@ -73,6 +125,13 @@ spec:
               value: {{ .Values.nllbModel | quote }}
             - name: LABSE_MODEL
               value: {{ .Values.labseModel | quote }}
+            # Path the initContainer populated + the encoder-id that
+            # /embed stamps on every response. MUST match the artifact
+            # in labseMirrorRef:labseMirrorVersion.
+            - name: LABSE_MODEL_PATH
+              value: "{{ .Values.localModelsPath }}/labse-{{ .Values.labseMirrorVersion }}"
+            - name: LABSE_ENCODER_ID
+              value: {{ .Values.labseEncoderId | quote }}
             - name: LOCAL_MODELS_PATH
               value: {{ .Values.localModelsPath | quote }}
             - name: INPROCESS_LRU_SIZE

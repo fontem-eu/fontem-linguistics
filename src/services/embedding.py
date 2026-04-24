@@ -34,18 +34,42 @@ class EmbeddingService:
 
         backend_str = backend.value
         start = time.perf_counter()
+        encoder_id = self._encoder_id(backend)
 
         cached = await self.cache.get_embedding(text, backend_str)
         if cached is not None:
             EMBEDDINGS_TOTAL.labels(backend=backend_str, cached="true").inc()
             EMBEDDING_LATENCY.labels(backend=backend_str).observe(time.perf_counter() - start)
-            return EmbeddingResult(vector=cached, dim=len(cached), backend=backend, cached=True)
+            return EmbeddingResult(
+                vector=cached, dim=len(cached), backend=backend,
+                cached=True, encoder_id=encoder_id,
+            )
 
         vec = await self._call_backend(text, backend)
         await self.cache.put_embedding(text, backend_str, vec)
         EMBEDDINGS_TOTAL.labels(backend=backend_str, cached="false").inc()
         EMBEDDING_LATENCY.labels(backend=backend_str).observe(time.perf_counter() - start)
-        return EmbeddingResult(vector=vec, dim=len(vec), backend=backend, cached=False)
+        return EmbeddingResult(
+            vector=vec, dim=len(vec), backend=backend,
+            cached=False, encoder_id=encoder_id,
+        )
+
+    def _encoder_id(self, backend: EmbeddingBackend) -> str:
+        """Resolve the signed-mirror identity of the active encoder.
+
+        Cached rows from a previous encoder version get re-stamped with
+        the current encoder_id — the cache keys by (text, backend), not
+        by version. That's acceptable today because we never bump the
+        encoder within a backend without also wiping the cache; see the
+        migration notes in the versioned-encoder plan.
+        """
+        if backend is EmbeddingBackend.MISTRAL_EMBED:
+            if self.mistral is None:
+                raise BackendUnavailable("mistral backend not configured")
+            return self.mistral.embed_encoder_id
+        if self.labse is None:
+            raise BackendUnavailable("labse-local backend not configured")
+        return self.labse.encoder_id
 
     async def _call_backend(self, text: str, backend: EmbeddingBackend) -> list[float]:
         if backend is EmbeddingBackend.MISTRAL_EMBED:

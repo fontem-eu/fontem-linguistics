@@ -34,6 +34,7 @@ class FakeMistral:
     vector: list[float] = field(default_factory=lambda: [0.5] * 1024)
     raises: Exception | None = None
     call_count: int = 0
+    embed_encoder_id: str = "mistral-embed@api-mistral-embed"
 
     def estimate_embed_usd(self, text_chars):
         return 0.00001
@@ -46,9 +47,10 @@ class FakeMistral:
 
 
 class _FakeLabse:
-    def __init__(self, vec=None):
+    def __init__(self, vec=None, encoder_id="labse@1.0.0-test000"):
         self.vec = vec or [0.1] * 768
         self.call_count = 0
+        self.encoder_id = encoder_id
 
     async def embed(self, text):
         self.call_count += 1
@@ -98,6 +100,27 @@ async def test_cache_miss_calls_labse():
     result = await svc.embed("hi", EmbeddingBackend.LABSE_LOCAL)
     assert result.dim == 768
     assert labse.call_count == 1
+    # Encoder identity on every embed — cache miss path.
+    assert result.encoder_id == "labse@1.0.0-test000"
+
+
+async def test_labse_encoder_id_on_cache_hit():
+    cache = FakeCache()
+    cache.embeddings[("hi", "labse-local")] = [0.4] * 768
+    labse = _FakeLabse(encoder_id="labse@2.3.0-abc1234")
+    svc = _mk(cache, labse=labse)
+    result = await svc.embed("hi", EmbeddingBackend.LABSE_LOCAL)
+    assert result.cached is True
+    assert result.encoder_id == "labse@2.3.0-abc1234"
+    assert labse.call_count == 0
+
+
+async def test_mistral_encoder_id_surfaces():
+    mistral = FakeMistral()
+    mistral.embed_encoder_id = "mistral-embed@api-mistral-embed"
+    svc = _mk(mistral=mistral)
+    result = await svc.embed("hi", EmbeddingBackend.MISTRAL_EMBED)
+    assert result.encoder_id == "mistral-embed@api-mistral-embed"
 
 
 async def test_empty_text_raises():

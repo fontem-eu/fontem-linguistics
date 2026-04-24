@@ -11,6 +11,14 @@ breakerMinRequests: "20"
 nllbModel: "facebook/nllb-200-distilled-600M"
 labseModel: "sentence-transformers/LaBSE"
 localModelsPath: "/models"
+# LaBSE signed-mirror. Tag + encoder-id MUST match the artifact that the
+# mirror-labse workflow pushed to the registry. Bump together after
+# running the workflow with a new mirror_version or hf_revision.
+labseMirrorVersion: "1.0.0"
+labseEncoderId: "labse@1.0.0-836121a"
+# Registry reference for the mirrored artifact. Held as a value so the
+# initContainer + helm template stay parameterised.
+labseMirrorRef: "gitea-http.dev-tools.svc.cluster.local:3000/golden/models/labse"
 inprocessLruSize: "4096"
 modelsVolumeSize: "10Gi"
 replicas: 1
