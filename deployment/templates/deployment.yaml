@@ -85,13 +85,17 @@ spec:
                 -o /tmp/bin/cosign
               chmod +x /tmp/bin/oras /tmp/bin/cosign
               echo "mirror-pull: verifying signature on ${REF}..."
+              # HTTPS via contribute.void42.internal; Void42 CA already
+              # trusted above, so no --allow-http-registry needed. The
+              # --insecure-ignore-tlog stays because we sign with a
+              # keypair (no transparency log), not keyless.
               /tmp/bin/cosign verify \
                 --key /etc/cosign/cosign.pub \
-                --allow-http-registry --insecure-ignore-tlog \
+                --insecure-ignore-tlog \
                 "${REF}"
               echo "mirror-pull: pulling artifact..."
               mkdir -p /tmp/artifact "${DEST}"
-              /tmp/bin/oras pull --plain-http "${REF}" -o /tmp/artifact
+              /tmp/bin/oras pull "${REF}" -o /tmp/artifact
               # Artifact is a plain tar (uncompressed); safetensors already
               # dense-binary, gzip was a waste on the push side.
               tar -xf /tmp/artifact/labse.tar -C "${DEST}"
