@@ -55,9 +55,14 @@ spec:
               apk add --no-cache curl ca-certificates tar >/dev/null
               mkdir -p /tmp/bin
               echo "mirror-pull: fetching oras + cosign from Nexus..."
-              curl -fsSL https://nexus.void42.internal/repository/github-releases/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
+              # -k because the internal CA isn't in alpine's bundle; the
+              # binaries we pull are then checked for provenance via
+              # cosign-verify against the model artifact (using a keypair,
+              # not a TLS cert), so the supply-chain root of trust is the
+              # Cosign key, not Nexus TLS.
+              curl -fsSLk https://nexus.void42.internal/repository/github-releases/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
                 | tar xz -C /tmp/bin oras
-              curl -fsSL https://nexus.void42.internal/repository/github-releases/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 \
+              curl -fsSLk https://nexus.void42.internal/repository/github-releases/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 \
                 -o /tmp/bin/cosign
               chmod +x /tmp/bin/oras /tmp/bin/cosign
               echo "mirror-pull: verifying signature on ${REF}..."
