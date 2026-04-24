@@ -1,0 +1,103 @@
+name: Mirror LaBSE
+
+# Pushes a signed OCI artifact mirror of the LaBSE model to the internal
+# registry. Source-of-truth is mirror/labse.version.yaml; the workflow
+# refuses to run if the pinned revision isn't a full 40-char SHA.
+#
+# Dispatched manually after bumping mirror/labse.version.yaml and/or
+# after the upstream HuggingFace revision we want to mirror has changed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type MIRROR to confirm'
+        required: true
+        default: ''
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    if: ${{ inputs.confirm == 'MIRROR' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python deps
+        env:
+          PIP_INDEX_URL: https://nexus.void42.internal/repository/pypi-proxy/simple/
+          PIP_TRUSTED_HOST: nexus.void42.internal
+        run: |
+          pip install --no-cache-dir huggingface_hub pyyaml
+
+      - name: Validate version file (reject non-SHA pins)
+        id: validate
+        run: python3 mirror/mirror_labse.py --skip-download
+
+      - name: Download + pack model snapshot
+        id: pack
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python3 mirror/mirror_labse.py --out-dir /tmp/labse-mirror
+
+      - name: Install oras + cosign
+        run: |
+          curl -sL https://nexus.void42.internal/repository/github-releases/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
+            | tar xz -C /usr/local/bin oras
+          chmod +x /usr/local/bin/oras
+          curl -sL https://nexus.void42.internal/repository/github-releases/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 -o /usr/local/bin/cosign
+          chmod +x /usr/local/bin/cosign
+
+      - name: Login to registry
+        run: |
+          echo "${{ secrets.REGISTRY_PASSWORD }}" \
+            | oras login gitea-http.dev-tools.svc.cluster.local:3000 \
+                --username "${{ secrets.REGISTRY_USER }}" --password-stdin
+
+      - name: Push OCI artifact
+        id: push
+        env:
+          TAG: ${{ steps.validate.outputs.tag }}
+          HF_REVISION: ${{ steps.validate.outputs.hf_revision }}
+          ENCODER_ID: ${{ steps.validate.outputs.encoder_id }}
+          FETCHED_AT: ${{ steps.pack.outputs.fetched_at }}
+        run: |
+          REF="gitea-http.dev-tools.svc.cluster.local:3000/golden/models/labse:${TAG}"
+          oras push --plain-http "$REF" \
+            --artifact-type application/vnd.gmr.model.labse.v1+json \
+            --annotation "org.opencontainers.image.source=https://huggingface.co/sentence-transformers/LaBSE" \
+            --annotation "org.opencontainers.image.revision=${HF_REVISION}" \
+            --annotation "org.opencontainers.image.created=${FETCHED_AT}" \
+            --annotation "io.gmr.encoder_id=${ENCODER_ID}" \
+            /tmp/labse-mirror/labse.tar.gz:application/gzip
+          # Resolve + export the immutable digest so subsequent steps sign
+          # the exact manifest we just pushed, not whatever "labse:1.0.0"
+          # resolves to later.
+          DIGEST=$(oras resolve --plain-http "$REF")
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "ref_by_digest=gitea-http.dev-tools.svc.cluster.local:3000/golden/models/labse@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign artifact with cosign
+        env:
+          COSIGN_PASSWORD: ""
+          COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
+        run: |
+          echo "$COSIGN_KEY" > /tmp/cosign.key
+          cosign sign --key /tmp/cosign.key --yes --allow-http-registry \
+            "${{ steps.push.outputs.ref_by_digest }}"
+          rm /tmp/cosign.key
+
+      - name: Attest SBOM with cosign
+        env:
+          COSIGN_PASSWORD: ""
+          COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
+        run: |
+          echo "$COSIGN_KEY" > /tmp/cosign.key
+          cosign attest --key /tmp/cosign.key --yes --allow-http-registry \
+            --type cyclonedx \
+            --predicate /tmp/labse-mirror/sbom.cdx.json \
+            "${{ steps.push.outputs.ref_by_digest }}"
+          rm /tmp/cosign.key
+
+      - name: Summary
+        run: |
+          echo "::notice title=Mirror done::${{ steps.validate.outputs.encoder_id }} → ${{ steps.push.outputs.ref_by_digest }}"
