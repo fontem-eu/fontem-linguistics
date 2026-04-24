@@ -8,17 +8,11 @@ name: Mirror LaBSE
 # after the upstream HuggingFace revision we want to mirror has changed.
 
 on:
-  workflow_dispatch:
-    inputs:
-      confirm:
-        description: 'Type MIRROR to confirm'
-        required: true
-        default: ''
+  workflow_dispatch: {}
 
 jobs:
   mirror:
     runs-on: ubuntu-latest
-    if: ${{ inputs.confirm == 'MIRROR' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -49,8 +43,11 @@ jobs:
 
       - name: Login to registry
         run: |
+          # Internal registry serves HTTP only; --plain-http skips the
+          # HTTPS probe that would otherwise fail with "server gave HTTP
+          # response to HTTPS client".
           echo "${{ secrets.REGISTRY_PASSWORD }}" \
-            | oras login gitea-http.dev-tools.svc.cluster.local:3000 \
+            | oras login --plain-http gitea-http.dev-tools.svc.cluster.local:3000 \
                 --username "${{ secrets.REGISTRY_USER }}" --password-stdin
 
       - name: Push OCI artifact
