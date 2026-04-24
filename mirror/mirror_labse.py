@@ -43,7 +43,12 @@ def _load_version(path: pathlib.Path) -> dict:
 
 
 def _download_snapshot(repo: str, revision: str, dest: pathlib.Path) -> None:
-    """Populate `dest` with the HF repo content at the pinned revision."""
+    """Populate `dest` with the HF repo content at the pinned revision.
+
+    We skip ``pytorch_model.bin`` when ``model.safetensors`` is present:
+    sentence-transformers prefers safetensors at load time anyway, and
+    shipping both doubles the artifact size (~1.9 GB duplicate on LaBSE).
+    """
     # Imported here so the top of the file stays lightweight when the caller
     # is only sanity-checking the version file.
     from huggingface_hub import snapshot_download  # pylint: disable=import-outside-toplevel
@@ -52,9 +57,10 @@ def _download_snapshot(repo: str, revision: str, dest: pathlib.Path) -> None:
         repo_id=repo,
         revision=revision,
         local_dir=str(dest),
-        # Symlinks would be sensitive to the HF cache layout on the runner;
-        # copy the real bytes so the tarball is self-contained.
-        local_dir_use_symlinks=False,
+        # Don't download the legacy pickled weights when the safetensors
+        # are available — halves download + tar time. The
+        # sentence-transformers loader handles the absence gracefully.
+        ignore_patterns=["pytorch_model.bin", "flax_model.msgpack", "tf_model.h5"],
     )
 
 
@@ -91,7 +97,11 @@ def _write_sbom(meta: dict, out: pathlib.Path) -> None:
 
 
 def _tar_dir(src: pathlib.Path, tar_path: pathlib.Path) -> None:
-    with tarfile.open(tar_path, "w:gz") as tf:
+    # Plain tar, NOT tar.gz. Model weights are already in compact binary
+    # formats (safetensors) — gzip costs ~10 min of single-threaded CPU
+    # on the CI runner for single-digit % savings, and the registry
+    # doesn't care about at-rest size. Keep it fast.
+    with tarfile.open(tar_path, "w") as tf:
         tf.add(str(src), arcname=".")
 
 
@@ -150,7 +160,7 @@ def main() -> int:
 
     fetched_at = datetime.now(timezone.utc).isoformat()
 
-    tar_path = out_dir / "labse.tar.gz"
+    tar_path = out_dir / "labse.tar"
     print(f"packing {snapshot_dir} → {tar_path}", flush=True)
     _tar_dir(snapshot_dir, tar_path)
 

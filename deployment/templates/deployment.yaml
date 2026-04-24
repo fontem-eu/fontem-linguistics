@@ -68,7 +68,9 @@ spec:
               echo "mirror-pull: pulling artifact..."
               mkdir -p /tmp/artifact "${DEST}"
               /tmp/bin/oras pull --plain-http "${REF}" -o /tmp/artifact
-              tar -xzf /tmp/artifact/labse.tar.gz -C "${DEST}"
+              # Artifact is a plain tar (uncompressed); safetensors already
+              # dense-binary, gzip was a waste on the push side.
+              tar -xf /tmp/artifact/labse.tar -C "${DEST}"
               echo "mirror-pull: done at ${DEST}"
           volumeMounts:
             - name: models

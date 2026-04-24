@@ -68,7 +68,7 @@ jobs:
             --annotation "org.opencontainers.image.revision=${HF_REVISION}" \
             --annotation "org.opencontainers.image.created=${FETCHED_AT}" \
             --annotation "io.gmr.encoder_id=${ENCODER_ID}" \
-            /tmp/labse-mirror/labse.tar.gz:application/gzip
+            /tmp/labse-mirror/labse.tar:application/x-tar
           # Resolve + export the immutable digest so subsequent steps sign
           # the exact manifest we just pushed, not whatever "labse:1.0.0"
           # resolves to later.
