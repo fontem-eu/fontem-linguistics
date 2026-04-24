@@ -12,7 +12,10 @@ on:
 
 jobs:
   mirror:
-    runs-on: ubuntu-latest
+    # ubuntu-latest on this runner maps to ci-node (no pip). The mirror
+    # workflow needs Python + curl + shell; `python` maps to ci-python
+    # which has all of them.
+    runs-on: python
     steps:
       - uses: actions/checkout@v4
 
