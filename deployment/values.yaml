@@ -16,9 +16,12 @@ localModelsPath: "/models"
 # running the workflow with a new mirror_version or hf_revision.
 labseMirrorVersion: "1.0.0"
 labseEncoderId: "labse@1.0.0-836121a"
-# Registry reference for the mirrored artifact. Held as a value so the
-# initContainer + helm template stay parameterised.
-labseMirrorRef: "gitea-http.dev-tools.svc.cluster.local:3000/golden/models/labse"
+# Registry reference for the mirrored artifact. Uses the HTTPS / ingress
+# hostname (contribute.void42.internal) so the initContainer authenticates
+# with the same dockerconfigjson that kubelet uses for imagePullSecrets.
+# The internal DNS alias (gitea-http.dev-tools.svc.cluster.local:3000)
+# keys credentials under a different host entry and would miss the auth.
+labseMirrorRef: "contribute.void42.internal/golden/models/labse"
 inprocessLruSize: "4096"
 modelsVolumeSize: "10Gi"
 replicas: 1
