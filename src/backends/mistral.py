@@ -43,6 +43,16 @@ class MistralBackend:
     price_embed_per_mtok: float
     client: httpx.AsyncClient
 
+    @property
+    def embed_encoder_id(self) -> str:
+        """Best-effort signed-mirror identity for a hosted API we don't
+        control. ``mistral-embed@api-<model>`` rather than a version SHA —
+        Mistral doesn't expose per-revision identifiers, and we don't mirror
+        this backend. Downstream consumers MUST NOT compare Mistral vectors
+        to LaBSE vectors (different encoder family, different vector space);
+        the encoder-id prefix is how they tell."""
+        return f"mistral-embed@api-{self.embed_model}"
+
     @classmethod
     def build(
         cls,

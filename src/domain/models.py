@@ -46,6 +46,12 @@ class EmbeddingResult:
     dim: int
     backend: EmbeddingBackend
     cached: bool
+    # Stamps the signed-mirror identity of the encoder that produced this
+    # vector, so downstream stores can reject cross-version comparisons.
+    # Format: "{backend}@{mirror_version}-{hf_sha7}", e.g.
+    # "labse@1.0.0-836121a". Mistral-embed (a hosted API we don't mirror)
+    # reports a best-effort "mistral-embed@api".
+    encoder_id: str
 
 
 class CircuitState(str, Enum):

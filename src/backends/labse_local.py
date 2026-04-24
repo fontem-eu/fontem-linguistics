@@ -1,7 +1,14 @@
-"""LaBSE (Language-agnostic BERT Sentence Embeddings) — 768-dim, CPU-OK."""
+"""LaBSE (Language-agnostic BERT Sentence Embeddings) — 768-dim, CPU-OK.
+
+Loads weights from a local path populated by the `mirror-pull`
+InitContainer, not from HuggingFace Hub. The path is version-keyed
+(e.g. `/models/labse-1.0.0`) so rolling the mirror is a path change,
+not an in-place overwrite.
+"""
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass, field
 
 from src.domain.models import BackendUnavailable
@@ -9,12 +16,18 @@ from src.domain.models import BackendUnavailable
 
 @dataclass
 class LabseLocalBackend:
-    model_name: str
-    local_path: str
-    # Dynamic int8 quantisation on the transformer's nn.Linear layers.
-    # LaBSE is ~471M params — fp32 ≈ 1.9 GB resident, int8 ≈ 0.5 GB on
-    # the weights, minimal accuracy drop for sentence-similarity use.
-    quantize: bool = True
+    # Directory containing the HuggingFace snapshot bytes for the mirrored
+    # LaBSE revision. Must pre-exist on disk (placed there by the pod's
+    # InitContainer); we never reach out to HF Hub from this backend.
+    model_path: str
+    # Signed-mirror identity, e.g. "labse@1.0.0-836121a". Stamped on every
+    # /embed response so downstream stores can reject cross-version
+    # comparisons and spot drift.
+    encoder_id: str
+    # Dynamic int8 quantisation on the transformer's nn.Linear layers —
+    # kept as a toggle but OFF by default pending re-evaluation with
+    # torchao's non-deprecated API (same reasoning as NllbLocalBackend).
+    quantize: bool = False
     _model: object | None = None
     _loaded: bool = False
     _load_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -25,6 +38,13 @@ class LabseLocalBackend:
         async with self._load_lock:
             if self._loaded:
                 return
+            if not os.path.isdir(self.model_path):
+                raise BackendUnavailable(
+                    f"labse-local: model_path {self.model_path!r} does not "
+                    "exist. The mirror-pull InitContainer should populate "
+                    "it before the api container starts; if this fires the "
+                    "pod's InitContainer failed or is disabled.",
+                )
             try:
                 import torch  # pylint: disable=import-outside-toplevel
                 from sentence_transformers import SentenceTransformer
@@ -36,15 +56,11 @@ class LabseLocalBackend:
 
             def _load_and_quantise():
                 import gc  # pylint: disable=import-outside-toplevel
-                model = SentenceTransformer(
-                    self.model_name, cache_folder=self.local_path,
-                )
+                # Local path, not HF repo id — sentence-transformers
+                # auto-detects this from the presence of config files.
+                model = SentenceTransformer(self.model_path)
                 model.eval()
                 if self.quantize:
-                    # SentenceTransformer wraps a plain HF transformer —
-                    # dynamic int8 on nn.Linear is safe; the pooling +
-                    # normalise ops stay fp32. Drop the fp32 copy
-                    # explicitly to shrink the load-time memory spike.
                     quantised = torch.quantization.quantize_dynamic(
                         model, {torch.nn.Linear}, dtype=torch.qint8,
                     )

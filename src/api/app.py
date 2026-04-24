@@ -51,8 +51,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         quantize=settings.local_quantize_int8,
     )
     labse = LabseLocalBackend(
-        model_name=settings.labse_model,
-        local_path=settings.local_models_path,
+        model_path=settings.labse_model_path,
+        encoder_id=settings.labse_encoder_id,
         quantize=settings.local_quantize_int8,
     )
 

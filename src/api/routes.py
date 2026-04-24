@@ -140,18 +140,33 @@ async def embed(req: EmbedRequest, request: Request) -> EmbedResponse:
         raise HTTPException(status_code=502, detail=f"mistral error: {exc}") from exc
 
     return EmbedResponse(
-        cached=result.cached, backend=result.backend, dim=result.dim, vector=result.vector,
+        cached=result.cached, backend=result.backend, dim=result.dim,
+        vector=result.vector, encoder_id=result.encoder_id,
     )
 
 
 @router.get("/models", response_model=ModelsResponse)
-async def models() -> ModelsResponse:
-    """List available backends with quality scores. Callers use this to pick a tier."""
+async def models(request: Request) -> ModelsResponse:
+    """List available backends with quality scores + encoder identities.
+
+    Callers use this to pick a tier; the encoder_id for embedders reflects
+    the currently-loaded signed-mirror revision (null for translators).
+    Tolerates the lifespan-not-yet-run case so /models still works before
+    services are initialised (e.g. during readiness polling pre-warmup).
+    """
+    encoder_ids: dict[str, str | None] = {}
+    services = getattr(request.app.state, "services", None)
+    if services is not None:
+        if services.embedding.mistral is not None:
+            encoder_ids["mistral-embed"] = services.embedding.mistral.embed_encoder_id
+        if services.embedding.labse is not None:
+            encoder_ids["labse-local"] = services.embedding.labse.encoder_id
     return ModelsResponse(models=[
         ModelInfoResponse(
             backend=m.backend, kind=m.kind, quality_score=m.quality_score,
             dim=m.dim, languages_supported=m.languages_supported,
             cost_tier=m.cost_tier, description=m.description,
+            encoder_id=encoder_ids.get(m.backend),
         )
         for m in CATALOG
     ])

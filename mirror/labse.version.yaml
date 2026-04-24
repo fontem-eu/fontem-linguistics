@@ -1,0 +1,19 @@
+# Source of truth for which LaBSE revision we mirror.
+# Bumping this file + dispatching the mirror workflow is the ONLY path
+# to a new labse mirror tag. Pod deployments read labseMirrorVersion /
+# labseEncoderId from values.yaml, which must match an artifact that
+# already exists in the registry.
+
+# Upstream model repo on HuggingFace Hub.
+hf_repo: sentence-transformers/LaBSE
+
+# MUST be a full 40-char commit SHA, not a branch name or tag.
+# This is what guarantees bit-for-bit reproducibility.
+# Resolved from https://huggingface.co/api/models/sentence-transformers/LaBSE
+# on 2026-04-23 (HF lastModified: 2025-03-06T13:40:25Z).
+hf_revision: 836121a0533e5664b21c7aacc5d22951f2b8b25b
+
+# Our mirror version. Bump on republish.
+# Final encoder_id is built as: labse@{mirror_version}-{hf_revision[:7]}
+# e.g. labse@1.0.0-836121a
+mirror_version: "1.0.0"

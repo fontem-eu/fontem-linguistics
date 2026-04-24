@@ -41,7 +41,23 @@ class Settings(BaseSettings):
 
     # Local models
     nllb_model: str = Field(default="facebook/nllb-200-distilled-600M")
+    # LaBSE is loaded from a local path populated by the pod's InitContainer
+    # (oras-pulled, cosign-verified OCI artifact). `labse_model` stays as a
+    # legacy config knob but is no longer read by the backend — every
+    # labse-local deploy must set labse_model_path + labse_encoder_id.
     labse_model: str = Field(default="sentence-transformers/LaBSE")
+    labse_model_path: str = Field(
+        default="/models/labse-1.0.0",
+        description="Filesystem path to the mirrored LaBSE snapshot.",
+    )
+    labse_encoder_id: str = Field(
+        default="labse@1.0.0-836121a",
+        description=(
+            "Signed-mirror identity of the loaded LaBSE, surfaced on every "
+            "/embed response. Must match the tag under which the artifact "
+            "was pushed by the mirror-labse workflow."
+        ),
+    )
     local_models_path: str = Field(default="/models")
     # Dynamic int8 quantisation on nn.Linear layers. Intuition says this
     # should shrink the resident footprint; in practice, measured on
