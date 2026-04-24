@@ -62,13 +62,16 @@ jobs:
           FETCHED_AT: ${{ steps.pack.outputs.fetched_at }}
         run: |
           REF="gitea-http.dev-tools.svc.cluster.local:3000/golden/models/labse:${TAG}"
+          # oras v1.2+ rejects absolute file paths by default; cd so the
+          # layer reference is a plain relative filename.
+          cd /tmp/labse-mirror
           oras push --plain-http "$REF" \
             --artifact-type application/vnd.gmr.model.labse.v1+json \
             --annotation "org.opencontainers.image.source=https://huggingface.co/sentence-transformers/LaBSE" \
             --annotation "org.opencontainers.image.revision=${HF_REVISION}" \
             --annotation "org.opencontainers.image.created=${FETCHED_AT}" \
             --annotation "io.gmr.encoder_id=${ENCODER_ID}" \
-            /tmp/labse-mirror/labse.tar:application/x-tar
+            labse.tar:application/x-tar
           # Resolve + export the immutable digest so subsequent steps sign
           # the exact manifest we just pushed, not whatever "labse:1.0.0"
           # resolves to later.

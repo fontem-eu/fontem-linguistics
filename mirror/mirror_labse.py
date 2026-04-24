@@ -57,10 +57,16 @@ def _download_snapshot(repo: str, revision: str, dest: pathlib.Path) -> None:
         repo_id=repo,
         revision=revision,
         local_dir=str(dest),
-        # Don't download the legacy pickled weights when the safetensors
-        # are available — halves download + tar time. The
-        # sentence-transformers loader handles the absence gracefully.
-        ignore_patterns=["pytorch_model.bin", "flax_model.msgpack", "tf_model.h5"],
+        # Skip every alternate serialisation of the same weights. What
+        # sentence-transformers actually loads is the safetensors +
+        # tokenizer + config; everything else here is extra variants
+        # (ONNX, OpenVINO, TF, Flax, pickled PyTorch, …) that bloat the
+        # artifact by a few GB each.
+        ignore_patterns=[
+            "pytorch_model.bin", "flax_model.msgpack", "tf_model.h5",
+            "onnx/**", "openvino/**", "*.onnx", "*.ot", "rust_model.ot",
+            "*.msgpack", "gguf/**", "coreml/**",
+        ],
     )
 
 
