@@ -30,6 +30,23 @@ spec:
         - name: cosign-pubkey
           configMap:
             name: gmr-linguistics-cosign-pubkey
+        # Void42 Root CA — so curl, oras and cosign trust
+        # nexus.void42.internal and the internal registry TLS without
+        # bypass flags. ConfigMap is template-owned (see
+        # templates/void42-ca-bundle.yaml), matching the same name used
+        # in cert-manager + kyverno namespaces.
+        - name: void42-ca
+          configMap:
+            name: void42-ca-bundle
+        # Registry auth for the mirror-pull initContainer. Same
+        # dockerconfigjson that kubelet uses for imagePullSecrets;
+        # oras + cosign read $DOCKER_CONFIG/config.json.
+        - name: regcred-docker
+          secret:
+            secretName: regcred
+            items:
+              - key: .dockerconfigjson
+                path: config.json
       # mirror-pull populates /models/labse-<version> from the signed
       # OCI artifact at labseMirrorRef:labseMirrorVersion. Runs every
       # pod start, but no-ops when the target directory already exists
@@ -42,6 +59,9 @@ spec:
               value: {{ .Values.labseMirrorRef | quote }}
             - name: MIRROR_VERSION
               value: {{ .Values.labseMirrorVersion | quote }}
+            # oras + cosign read config.json from here for registry auth.
+            - name: DOCKER_CONFIG
+              value: /etc/docker-auth
           command: ["sh", "-c"]
           args:
             - |
@@ -53,16 +73,15 @@ spec:
                 exit 0
               fi
               apk add --no-cache curl ca-certificates tar >/dev/null
+              # Trust the Void42 Root CA so nexus.void42.internal and the
+              # internal registry pass TLS verification without -k.
+              cp /var/ca/ca.crt /usr/local/share/ca-certificates/void42-ca.crt
+              update-ca-certificates >/dev/null
               mkdir -p /tmp/bin
               echo "mirror-pull: fetching oras + cosign from Nexus..."
-              # -k because the internal CA isn't in alpine's bundle; the
-              # binaries we pull are then checked for provenance via
-              # cosign-verify against the model artifact (using a keypair,
-              # not a TLS cert), so the supply-chain root of trust is the
-              # Cosign key, not Nexus TLS.
-              curl -fsSLk https://nexus.void42.internal/repository/github-releases/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
+              curl -fsSL https://nexus.void42.internal/repository/github-releases/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
                 | tar xz -C /tmp/bin oras
-              curl -fsSLk https://nexus.void42.internal/repository/github-releases/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 \
+              curl -fsSL https://nexus.void42.internal/repository/github-releases/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 \
                 -o /tmp/bin/cosign
               chmod +x /tmp/bin/oras /tmp/bin/cosign
               echo "mirror-pull: verifying signature on ${REF}..."
@@ -82,6 +101,12 @@ spec:
               mountPath: /models
             - name: cosign-pubkey
               mountPath: /etc/cosign
+              readOnly: true
+            - name: void42-ca
+              mountPath: /var/ca
+              readOnly: true
+            - name: regcred-docker
+              mountPath: /etc/docker-auth
               readOnly: true
       containers:
         - name: api
