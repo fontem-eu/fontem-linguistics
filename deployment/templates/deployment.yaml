@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: gmr-linguistics
+  name: fontem-linguistics
   namespace: {{ .Release.Namespace }}
 spec:
   replicas: {{ .Values.replicas | default 1 }}
@@ -12,35 +12,35 @@ spec:
       maxUnavailable: 0
   selector:
     matchLabels:
-      app: gmr-linguistics
+      app: fontem-linguistics
   template:
     metadata:
       labels:
-        app: gmr-linguistics
+        app: fontem-linguistics
     spec:
       imagePullSecrets:
         - name: regcred
       volumes:
         - name: models
           persistentVolumeClaim:
-            claimName: gmr-linguistics-models
+            claimName: fontem-linguistics-models
       containers:
         - name: api
-          image: contribute.void42.internal/golden/gmr-linguistics:{{ .Values.version }}
+          image: contribute.void42.internal/golden/fontem-linguistics:{{ .Values.version }}
           ports:
             - containerPort: 8080
           env:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: gmr-linguistics-pg-credentials
+                  name: fontem-linguistics-pg-credentials
                   key: POSTGRES_PASSWORD
             - name: DATABASE_URL
               value: {{ .Values.databaseUrl | quote }}
             - name: MISTRAL_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: gmr-linguistics-mistral-credentials
+                  name: fontem-linguistics-mistral-credentials
                   key: api-key
             # HuggingFace Hub token — lifts the anonymous rate limit
             # for NLLB + LaBSE model downloads on first use of the
@@ -50,7 +50,7 @@ spec:
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: gmr-linguistics-huggingface-credentials
+                  name: fontem-linguistics-huggingface-credentials
                   key: token
                   optional: true
             - name: MISTRAL_API_URL
@@ -99,7 +99,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: gmr-linguistics-models
+  name: fontem-linguistics-models
   namespace: {{ .Release.Namespace }}
 spec:
   accessModes: [ReadWriteOnce]

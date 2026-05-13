@@ -1,11 +1,11 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: gmr-linguistics
+  name: fontem-linguistics
   namespace: {{ .Release.Namespace }}
 spec:
   selector:
-    app: gmr-linguistics
+    app: fontem-linguistics
   ports:
     - name: http
       port: 8080

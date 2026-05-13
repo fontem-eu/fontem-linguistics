@@ -1,4 +1,4 @@
 apiVersion: v1
-name: gmr-linguistics
+name: fontem-linguistics
 version: 1.0.0
 description: Translation + embedding service — durable cache, Mistral + NLLB/LaBSE backends

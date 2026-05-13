@@ -73,7 +73,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         mistral_breaker=breaker, mistral_spend_cap=spend_cap,
     )
     app.state.services = Services(translation=translation, embedding=embedding)
-    logger.info("gmr-linguistics ready (mistral={}, nllb={}, labse={})",
+    logger.info("fontem-linguistics ready (mistral={}, nllb={}, labse={})",
                 mistral is not None, True, True)
 
     try:
@@ -128,7 +128,7 @@ async def _ensure_schema(cache: PostgresCache) -> None:
 
 def build_app(settings: Settings | None = None) -> FastAPI:
     s = settings or get_settings()
-    application = FastAPI(title="gmr-linguistics", version="0.1.0", lifespan=lifespan)
+    application = FastAPI(title="fontem-linguistics", version="0.1.0", lifespan=lifespan)
     application.state.settings = s
     application.include_router(router)
     return application

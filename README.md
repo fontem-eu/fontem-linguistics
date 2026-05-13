@@ -1,4 +1,4 @@
-# gmr-linguistics
+# fontem-linguistics
 
 Durable-cached translation + embedding service for GMR. Thin dispatcher in
 front of Mistral (paid, high quality) and locally-hosted NLLB-200 / LaBSE
