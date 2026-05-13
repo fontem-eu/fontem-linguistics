@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: gmr-linguistics
+  name: fontem-linguistics
   namespace: {{ .Release.Namespace }}
 spec:
   replicas: {{ .Values.replicas | default 1 }}
@@ -12,123 +12,35 @@ spec:
       maxUnavailable: 0
   selector:
     matchLabels:
-      app: gmr-linguistics
+      app: fontem-linguistics
   template:
     metadata:
       labels:
-        app: gmr-linguistics
+        app: fontem-linguistics
     spec:
       imagePullSecrets:
         - name: regcred
       volumes:
         - name: models
           persistentVolumeClaim:
-            claimName: gmr-linguistics-models
-        # Cosign public key — same key that signs app images. Mounted
-        # read-only into the mirror-pull initContainer so signature
-        # verification can happen before we unpack anything.
-        - name: cosign-pubkey
-          configMap:
-            name: gmr-linguistics-cosign-pubkey
-        # Void42 Root CA — so curl, oras and cosign trust
-        # nexus.void42.internal and the internal registry TLS without
-        # bypass flags. ConfigMap is template-owned (see
-        # templates/void42-ca-bundle.yaml), matching the same name used
-        # in cert-manager + kyverno namespaces.
-        - name: void42-ca
-          configMap:
-            name: void42-ca-bundle
-        # Registry auth for the mirror-pull initContainer. Same
-        # dockerconfigjson that kubelet uses for imagePullSecrets;
-        # oras + cosign read $DOCKER_CONFIG/config.json.
-        - name: regcred-docker
-          secret:
-            secretName: regcred
-            items:
-              - key: .dockerconfigjson
-                path: config.json
-      # mirror-pull populates /models/labse-<version> from the signed
-      # OCI artifact at labseMirrorRef:labseMirrorVersion. Runs every
-      # pod start, but no-ops when the target directory already exists
-      # on the PVC — k8s restarts stay fast.
-      initContainers:
-        - name: mirror-pull
-          image: alpine:3.19
-          env:
-            - name: MIRROR_REF
-              value: {{ .Values.labseMirrorRef | quote }}
-            - name: MIRROR_VERSION
-              value: {{ .Values.labseMirrorVersion | quote }}
-            # oras + cosign read config.json from here for registry auth.
-            - name: DOCKER_CONFIG
-              value: /etc/docker-auth
-          command: ["sh", "-c"]
-          args:
-            - |
-              set -eu
-              DEST="/models/labse-${MIRROR_VERSION}"
-              REF="${MIRROR_REF}:${MIRROR_VERSION}"
-              if [ -f "${DEST}/config.json" ] || [ -f "${DEST}/modules.json" ]; then
-                echo "mirror-pull: ${DEST} already populated; skipping"
-                exit 0
-              fi
-              apk add --no-cache curl ca-certificates tar >/dev/null
-              # Trust the Void42 Root CA so nexus.void42.internal and the
-              # internal registry pass TLS verification without -k.
-              cp /var/ca/ca.crt /usr/local/share/ca-certificates/void42-ca.crt
-              update-ca-certificates >/dev/null
-              mkdir -p /tmp/bin
-              echo "mirror-pull: fetching oras + cosign from Nexus..."
-              curl -fsSL https://nexus.void42.internal/repository/github-releases/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
-                | tar xz -C /tmp/bin oras
-              curl -fsSL https://nexus.void42.internal/repository/github-releases/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 \
-                -o /tmp/bin/cosign
-              chmod +x /tmp/bin/oras /tmp/bin/cosign
-              echo "mirror-pull: verifying signature on ${REF}..."
-              # HTTPS via contribute.void42.internal; Void42 CA already
-              # trusted above, so no --allow-http-registry needed. The
-              # --insecure-ignore-tlog stays because we sign with a
-              # keypair (no transparency log), not keyless.
-              /tmp/bin/cosign verify \
-                --key /etc/cosign/cosign.pub \
-                --insecure-ignore-tlog \
-                "${REF}"
-              echo "mirror-pull: pulling artifact..."
-              mkdir -p /tmp/artifact "${DEST}"
-              /tmp/bin/oras pull "${REF}" -o /tmp/artifact
-              # Artifact is a plain tar (uncompressed); safetensors already
-              # dense-binary, gzip was a waste on the push side.
-              tar -xf /tmp/artifact/labse.tar -C "${DEST}"
-              echo "mirror-pull: done at ${DEST}"
-          volumeMounts:
-            - name: models
-              mountPath: /models
-            - name: cosign-pubkey
-              mountPath: /etc/cosign
-              readOnly: true
-            - name: void42-ca
-              mountPath: /var/ca
-              readOnly: true
-            - name: regcred-docker
-              mountPath: /etc/docker-auth
-              readOnly: true
+            claimName: fontem-linguistics-models
       containers:
         - name: api
-          image: contribute.void42.internal/fontem/gmr-linguistics:{{ .Values.version }}
+          image: contribute.void42.internal/golden/fontem-linguistics:{{ .Values.version }}
           ports:
             - containerPort: 8080
           env:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: gmr-linguistics-pg-credentials
+                  name: fontem-linguistics-pg-credentials
                   key: POSTGRES_PASSWORD
             - name: DATABASE_URL
               value: {{ .Values.databaseUrl | quote }}
             - name: MISTRAL_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: gmr-linguistics-mistral-credentials
+                  name: fontem-linguistics-mistral-credentials
                   key: api-key
             # HuggingFace Hub token — lifts the anonymous rate limit
             # for NLLB + LaBSE model downloads on first use of the
@@ -138,7 +50,7 @@ spec:
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: gmr-linguistics-huggingface-credentials
+                  name: fontem-linguistics-huggingface-credentials
                   key: token
                   optional: true
             - name: MISTRAL_API_URL
@@ -161,13 +73,6 @@ spec:
               value: {{ .Values.nllbModel | quote }}
             - name: LABSE_MODEL
               value: {{ .Values.labseModel | quote }}
-            # Path the initContainer populated + the encoder-id that
-            # /embed stamps on every response. MUST match the artifact
-            # in labseMirrorRef:labseMirrorVersion.
-            - name: LABSE_MODEL_PATH
-              value: "{{ .Values.localModelsPath }}/labse-{{ .Values.labseMirrorVersion }}"
-            - name: LABSE_ENCODER_ID
-              value: {{ .Values.labseEncoderId | quote }}
             - name: LOCAL_MODELS_PATH
               value: {{ .Values.localModelsPath | quote }}
             - name: INPROCESS_LRU_SIZE
@@ -194,7 +99,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: gmr-linguistics-models
+  name: fontem-linguistics-models
   namespace: {{ .Release.Namespace }}
 spec:
   accessModes: [ReadWriteOnce]

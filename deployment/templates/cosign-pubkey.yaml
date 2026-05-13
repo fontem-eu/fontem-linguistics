@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: gmr-linguistics-cosign-pubkey
+  name: fontem-linguistics-cosign-pubkey
   namespace: {{ .Release.Namespace }}
 data:
   # Public half of the Cosign key pair that signs our app images and
