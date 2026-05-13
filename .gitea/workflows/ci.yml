@@ -63,8 +63,8 @@ jobs:
           TAG="v$(git rev-parse --short HEAD)"
           echo "TAG=$TAG" >> $GITHUB_ENV
           echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login gitea-http.dev-tools.svc.cluster.local:3000 -u "${{ secrets.REGISTRY_USER }}" --password-stdin
-          docker build --network host -t gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-linguistics:$TAG .
-          docker push gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-linguistics:$TAG
+          docker build --network host -t gitea-http.dev-tools.svc.cluster.local:3000/fontem/gmr-linguistics:$TAG .
+          docker push gitea-http.dev-tools.svc.cluster.local:3000/fontem/gmr-linguistics:$TAG
       - name: Sign image with Cosign
         env:
           COSIGN_PASSWORD: ""
@@ -73,11 +73,11 @@ jobs:
           curl -sL https://nexus.void42.internal/repository/github-releases/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 -o /usr/local/bin/cosign
           chmod +x /usr/local/bin/cosign
           echo "$COSIGN_KEY" > /tmp/cosign.key
-          cosign sign --key /tmp/cosign.key --yes --allow-http-registry gitea-http.dev-tools.svc.cluster.local:3000/golden/gmr-linguistics:$TAG
+          cosign sign --key /tmp/cosign.key --yes --allow-http-registry gitea-http.dev-tools.svc.cluster.local:3000/fontem/gmr-linguistics:$TAG
           rm /tmp/cosign.key
       - name: Deploy to gitops (prod — singleton)
         run: |
-          git clone --depth=1 http://oauth2:${{ secrets.REGISTRY_PASSWORD }}@gitea-http.dev-tools.svc.cluster.local:3000/golden/gitops.git /tmp/gitops
+          git clone --depth=1 http://oauth2:${{ secrets.REGISTRY_PASSWORD }}@gitea-http.dev-tools.svc.cluster.local:3000/fontem/gitops.git /tmp/gitops
           cd /tmp/gitops
           sed -i 's/version: ".*"/version: "'$TAG'"/' prod/gmr-linguistics.yaml
           git config user.name "GMR CI"
