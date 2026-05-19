@@ -61,7 +61,7 @@ jobs:
           ENCODER_ID: ${{ steps.validate.outputs.encoder_id }}
           FETCHED_AT: ${{ steps.pack.outputs.fetched_at }}
         run: |
-          REF="gitea-http.dev-tools.svc.cluster.local:3000/golden/models/labse:${TAG}"
+          REF="gitea-http.dev-tools.svc.cluster.local:3000/fontem/models/labse:${TAG}"
           # oras v1.2+ rejects absolute file paths by default; cd so the
           # layer reference is a plain relative filename.
           cd /tmp/labse-mirror
@@ -77,7 +77,7 @@ jobs:
           # resolves to later.
           DIGEST=$(oras resolve --plain-http "$REF")
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "ref_by_digest=gitea-http.dev-tools.svc.cluster.local:3000/golden/models/labse@${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "ref_by_digest=gitea-http.dev-tools.svc.cluster.local:3000/fontem/models/labse@${DIGEST}" >> "$GITHUB_OUTPUT"
 
       - name: Sign artifact with cosign
         env:
