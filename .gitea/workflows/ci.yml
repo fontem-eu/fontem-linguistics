@@ -79,9 +79,9 @@ jobs:
         run: |
           git clone --depth=1 "http://${{ secrets.REGISTRY_USER }}:${{ secrets.REGISTRY_PASSWORD }}@gitea-http.dev-tools.svc.cluster.local:3000/fontem/gitops.git" /tmp/gitops
           cd /tmp/gitops
-          sed -i 's/version: ".*"/version: "'$TAG'"/' prod/fontem-linguistics.yaml
+          sed -i 's/version: ".*"/version: "'$TAG'"/' linguistics-service/fontem-linguistics.yaml
           git config user.name "GMR CI"
           git config user.email "ci@void42.internal"
-          git add prod/fontem-linguistics.yaml
+          git add linguistics-service/fontem-linguistics.yaml
           git diff --cached --quiet || git commit -m "ci: deploy fontem-linguistics $TAG"
           git push origin main
