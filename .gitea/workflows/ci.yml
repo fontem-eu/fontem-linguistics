@@ -27,7 +27,6 @@ jobs:
 
   analyze:
     needs: test
-    if: github.ref == 'refs/heads/main'
     runs-on: python
     steps:
       - uses: actions/checkout@v4
