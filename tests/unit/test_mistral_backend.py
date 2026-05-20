@@ -218,7 +218,6 @@ async def test_transport_error_retries_then_raises():
 
 
 async def test_build_factory_creates_client():
-    from src.backends.mistral import MistralBackend
     b = MistralBackend.build(
         api_url="https://example/v1", api_key="test-key-never-used",
         chat_model="m", embed_model="me", timeout_s=5.0, max_retries=1,

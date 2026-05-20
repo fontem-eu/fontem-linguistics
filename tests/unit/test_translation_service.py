@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 import pytest
 
@@ -97,7 +96,7 @@ async def test_full_cache_hit_skips_backend():
     assert result.translations == {"fr": "salut"}
     assert result.fully_cached is True
     assert mistral.call_count == 0
-    assert cache.put_calls == []
+    assert not cache.put_calls
 
 
 async def test_partial_cache_only_fetches_missing():

@@ -9,7 +9,10 @@ def test_settings_loads_defaults(monkeypatch):
     assert s.tablespace == "linguistics_ts"
     assert s.breaker_failure_threshold == 0.05
     assert s.spend_cap_usd_daily == 50.0
-    assert s.mistral_chat_model.startswith("mistral-")
+    # pylint sees the pydantic Field default as a FieldInfo object rather
+    # than the resolved string at runtime; the assertion runs against the
+    # real value.
+    assert s.mistral_chat_model.startswith("mistral-")  # pylint: disable=no-member
 
 
 def test_settings_reads_env(monkeypatch):

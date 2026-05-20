@@ -57,7 +57,9 @@ async def test_rollover_on_new_day(monkeypatch):
     await cap.reserve(0.8)
     assert await cap.spent() == pytest.approx(0.8)
 
-    # Simulate a day passing by rewinding _today directly.
-    cap._today = date.today() - timedelta(days=1)
+    # Simulate a day passing by rewinding _today directly. The rollover
+    # check is intentionally driven off the private cursor; pinning that
+    # behavior here is the cleanest test, hence the protected-access.
+    cap._today = date.today() - timedelta(days=1)  # pylint: disable=protected-access
     await cap.reserve(0.5)
     assert await cap.spent() == pytest.approx(0.5)

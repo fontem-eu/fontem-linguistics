@@ -26,7 +26,9 @@ class PostgresCache:
     embedding_lru: LRUCache
 
     @classmethod
-    async def connect(cls, dsn: str, lru_size: int = 1024, min_size: int = 2, max_size: int = 10) -> "PostgresCache":
+    async def connect(
+        cls, dsn: str, lru_size: int = 1024, min_size: int = 2, max_size: int = 10
+    ) -> "PostgresCache":
         pool = await asyncpg.create_pool(dsn=dsn, min_size=min_size, max_size=max_size)
         return cls(
             pool=pool,

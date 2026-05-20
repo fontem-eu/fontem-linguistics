@@ -39,7 +39,15 @@ def _services(request: Request) -> Services:
     return svc
 
 
-@router.post("/translate", response_model=TranslateResponse)
+@router.post(
+    "/translate",
+    responses={
+        400: {"description": "Invalid request (empty text or empty targets)."},
+        429: {"description": "Daily spend cap exceeded for the Mistral backend."},
+        502: {"description": "Mistral upstream returned an error or transient failure."},
+        503: {"description": "Backend unavailable or circuit breaker open."},
+    },
+)
 async def translate(req: TranslateRequest, request: Request) -> TranslateResponse:
     try:
         result = await _services(request).translation.translate(
@@ -51,9 +59,15 @@ async def translate(req: TranslateRequest, request: Request) -> TranslateRespons
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except CircuitOpen as exc:
-        return _circuit_open_response(exc)
+        raise HTTPException(
+            status_code=503, detail=str(exc),
+            headers={"X-Backend-State": "circuit-open"},
+        ) from exc
     except SpendCapExceeded as exc:
-        return _spend_cap_response(exc)
+        raise HTTPException(
+            status_code=429, detail=str(exc),
+            headers={"X-Backend-State": "spend-cap-exceeded"},
+        ) from exc
     except BackendUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except MistralTransientError as exc:
@@ -76,7 +90,7 @@ _IDEMPOTENCY_STORE: "OrderedDict[str, BatchTranslateResponse]" = OrderedDict()
 _IDEMPOTENCY_MAX = 2048
 
 
-@router.post("/translate/batch", response_model=BatchTranslateResponse)
+@router.post("/translate/batch")
 async def translate_batch(
     req: BatchTranslateRequest,
     request: Request,
@@ -122,16 +136,30 @@ async def translate_batch(
     return response
 
 
-@router.post("/embed", response_model=EmbedResponse)
+@router.post(
+    "/embed",
+    responses={
+        400: {"description": "Invalid request (empty text)."},
+        429: {"description": "Daily spend cap exceeded for the Mistral backend."},
+        502: {"description": "Mistral upstream returned an error or transient failure."},
+        503: {"description": "Backend unavailable or circuit breaker open."},
+    },
+)
 async def embed(req: EmbedRequest, request: Request) -> EmbedResponse:
     try:
         result = await _services(request).embedding.embed(req.text, req.backend)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except CircuitOpen as exc:
-        return _circuit_open_response(exc)
+        raise HTTPException(
+            status_code=503, detail=str(exc),
+            headers={"X-Backend-State": "circuit-open"},
+        ) from exc
     except SpendCapExceeded as exc:
-        return _spend_cap_response(exc)
+        raise HTTPException(
+            status_code=429, detail=str(exc),
+            headers={"X-Backend-State": "spend-cap-exceeded"},
+        ) from exc
     except BackendUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except MistralTransientError as exc:
@@ -145,7 +173,7 @@ async def embed(req: EmbedRequest, request: Request) -> EmbedResponse:
     )
 
 
-@router.get("/models", response_model=ModelsResponse)
+@router.get("/models")
 async def models(request: Request) -> ModelsResponse:
     """List available backends with quality scores + encoder identities.
 
@@ -172,7 +200,7 @@ async def models(request: Request) -> ModelsResponse:
     ])
 
 
-@router.get("/languages", response_model=LanguagesResponse)
+@router.get("/languages")
 async def languages() -> LanguagesResponse:
     """Canonical list of the 24 EU official languages that callers target."""
     return LanguagesResponse(languages=[
@@ -185,7 +213,10 @@ async def healthz() -> dict:
     return {"status": "ok"}
 
 
-@router.get("/readyz")
+@router.get(
+    "/readyz",
+    responses={503: {"description": "Backing database is unavailable."}},
+)
 async def readyz(request: Request) -> dict:
     try:
         cache = request.app.state.cache
@@ -199,21 +230,3 @@ async def readyz(request: Request) -> dict:
 @router.get("/metrics")
 async def metrics() -> Response:
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
-
-
-def _circuit_open_response(exc: Exception) -> TranslateResponse:
-    # Fail-loud: 503 with explicit header. The route-level return is a shim —
-    # raise so FastAPI serializes it consistently.
-    raise HTTPException(
-        status_code=503,
-        detail=str(exc),
-        headers={"X-Backend-State": "circuit-open"},
-    )
-
-
-def _spend_cap_response(exc: Exception) -> TranslateResponse:
-    raise HTTPException(
-        status_code=429,
-        detail=str(exc),
-        headers={"X-Backend-State": "spend-cap-exceeded"},
-    )

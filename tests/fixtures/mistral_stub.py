@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass, field
 
 from fastapi import FastAPI, Request
@@ -22,8 +23,6 @@ class StubState:
     embed_responses: list[tuple[int, dict]] = field(default_factory=list)
     calls: list[tuple[str, dict]] = field(default_factory=list)
 
-
-import re
 
 _KEYS_LINE_RE = re.compile(r"keys:\s*([^\n]+)")
 _ISO_RE = re.compile(r'"([a-z]{2,3})"')

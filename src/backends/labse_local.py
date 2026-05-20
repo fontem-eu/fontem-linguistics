@@ -46,7 +46,9 @@ class LabseLocalBackend:
                     "pod's InitContainer failed or is disabled.",
                 )
             try:
-                import torch  # pylint: disable=import-outside-toplevel
+                # pylint: disable-next=import-outside-toplevel
+                import torch
+                # pylint: disable-next=import-outside-toplevel
                 from sentence_transformers import SentenceTransformer
             except ImportError as exc:
                 raise BackendUnavailable(

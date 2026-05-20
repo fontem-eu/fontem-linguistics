@@ -37,7 +37,9 @@ class InMemoryCache:
             self.translations[(text, source_lang, t, backend)] = v
 
     async def get_embedding(self, text, backend):
-        return list(self.embeddings[(text, backend)]) if (text, backend) in self.embeddings else None
+        if (text, backend) not in self.embeddings:
+            return None
+        return list(self.embeddings[(text, backend)])
 
     async def put_embedding(self, text, backend, vector):
         self.embeddings[(text, backend)] = list(vector)
@@ -91,7 +93,7 @@ def app_and_state():
 
 
 def test_translate_endpoint_happy_path(app_and_state):
-    app, stub, *_ = app_and_state
+    app, _stub, *_ = app_and_state
     client = TestClient(app)
     r = client.post("/translate", json={
         "text": "Ministero della Difesa",
@@ -121,7 +123,7 @@ def test_translate_cache_hit_second_call(app_and_state):
 
 
 def test_translate_partial_cache(app_and_state):
-    app, stub, *_ = app_and_state
+    app, _stub, *_ = app_and_state
     client = TestClient(app)
     client.post("/translate", json={
         "text": "x", "source_lang": "en",
@@ -148,7 +150,7 @@ def test_translate_400_on_missing_targets(app_and_state):
 
 
 def test_translate_returns_503_when_breaker_open(app_and_state):
-    app, stub, breaker, cap = app_and_state
+    app, _stub, breaker, _cap = app_and_state
     client = TestClient(app)
     # Force the breaker open.
     breaker.failure_threshold = 0.0
@@ -165,7 +167,7 @@ def test_translate_returns_503_when_breaker_open(app_and_state):
 
 
 def test_translate_returns_429_when_spend_cap_exceeded(app_and_state):
-    app, stub, breaker, cap = app_and_state
+    app, _stub, _breaker, cap = app_and_state
     client = TestClient(app)
     cap.daily_cap_usd = 0.0   # any reservation is rejected
 
@@ -206,7 +208,7 @@ def test_translate_502_on_mistral_transient_exhausted(app_and_state):
 
 
 def test_batch_endpoint_happy(app_and_state):
-    app, stub, *_ = app_and_state
+    app, _stub, *_ = app_and_state
     client = TestClient(app)
     r = client.post("/translate/batch", json={
         "items": [
@@ -239,7 +241,7 @@ def test_batch_endpoint_idempotency_key(app_and_state):
 
 
 def test_embed_endpoint_happy(app_and_state):
-    app, stub, *_ = app_and_state
+    app, _stub, *_ = app_and_state
     client = TestClient(app)
     r = client.post("/embed", json={"text": "hello", "backend": "mistral-embed"})
     assert r.status_code == 200

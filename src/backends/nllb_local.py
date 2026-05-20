@@ -28,8 +28,11 @@ def to_nllb_code(iso: str) -> str:
     return code
 
 
+# NllbLocalBackend bundles model identity, runtime state (lock, loaded flag,
+# tokenizer, model) and config in one dataclass — splitting would just push
+# the coupling around without removing it.
 @dataclass
-class NllbLocalBackend:
+class NllbLocalBackend:  # pylint: disable=too-many-instance-attributes
     model_name: str
     local_path: str
     # Pinning revisions is supply-chain hygiene: without this, transformers
@@ -53,7 +56,9 @@ class NllbLocalBackend:
             if self._loaded:
                 return
             try:
-                import torch  # pylint: disable=import-outside-toplevel
+                # pylint: disable-next=import-outside-toplevel
+                import torch
+                # pylint: disable-next=import-outside-toplevel
                 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
             except ImportError as exc:
                 raise BackendUnavailable(

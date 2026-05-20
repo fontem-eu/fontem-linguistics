@@ -18,7 +18,10 @@ def pg_dsn():
     try:
         ctr = PostgresContainer("postgres:16-alpine")
         ctr.start()
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # testcontainers raises a grab-bag of docker.errors/urllib/socket
+        # subclasses depending on the failure mode (no docker socket,
+        # image pull failure, port collision); we want to skip on all.
         pytest.skip(f"cannot start postgres container: {exc}")
     # testcontainers returns a psycopg URL; asyncpg wants postgresql://
     dsn = ctr.get_connection_url().replace("postgresql+psycopg2://", "postgresql://")

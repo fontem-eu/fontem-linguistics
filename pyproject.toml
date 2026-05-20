@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fontem-linguistics"
+version = "0.1.0"
+description = "FastAPI translation + embedding service for the fontem stack."
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+# Pylint config — disable stylistic rules that don't fit an internal
+# FastAPI service:
+#   missing-{module,class,function}-docstring — typed signatures +
+#     symbol names already document the surface; pydantic models and
+#     route handlers are self-describing. Docstring stubs would just
+#     be lint-debt.
+#   too-few-public-methods — pydantic request/response envelopes and
+#     dataclass-only DTOs legitimately have no methods.
+#   duplicate-code — pylint's similarity detector flags the
+#     near-identical lazy-load lock pattern across labse/nllb local
+#     backends and shared InMemoryCache fixtures across component
+#     tests; both are intrinsic to the protocol shape.
+#   redefined-outer-name — pytest fixtures are referenced by parameter
+#     name in test functions, which pylint sees as shadowing. This is
+#     the documented pytest pattern, not a bug.
+#   unused-argument — test stubs and httpx mock-transport handlers
+#     must match a protocol/callable signature; the unused parameter
+#     names document the interface they're implementing.
+#   import-outside-toplevel — env-controlled imports (testcontainers,
+#     heavy ML libs guarded behind feature flags) are imported inside
+#     fixtures/methods on purpose.
+[tool.pylint."messages control"]
+disable = [
+    "missing-module-docstring",
+    "missing-class-docstring",
+    "missing-function-docstring",
+    "too-few-public-methods",
+    "duplicate-code",
+    "redefined-outer-name",
+    "unused-argument",
+    "import-outside-toplevel",
+]

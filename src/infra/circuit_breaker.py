@@ -20,8 +20,10 @@ class _Event:
     ok: bool
 
 
+# CircuitBreaker holds 4 tunables + 4 runtime fields; this is the natural
+# shape of the breaker state machine.
 @dataclass
-class CircuitBreaker:
+class CircuitBreaker:  # pylint: disable=too-many-instance-attributes
     failure_threshold: float = 0.05
     window_s: float = 60
     cooldown_s: float = 30

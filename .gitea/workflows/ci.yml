@@ -19,7 +19,7 @@ jobs:
       - name: Integration tests (testcontainers-postgres)
         run: python3 -m pytest tests/integration -q || echo "integration skipped (no docker in runner)"
       - name: Lint
-        run: python3 -m pylint src tests --output-format=parseable --reports=no 2>&1 | tail -1 || true
+        run: python3 -m pylint src tests --output-format=parseable --reports=no
       - name: Security audit
         run: |
           pip-audit -r requirements.txt --desc 2>&1 || true

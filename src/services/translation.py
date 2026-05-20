@@ -47,7 +47,7 @@ class TranslationService:
         missing = [t for t in targets if t not in cached]
 
         if not missing:
-            for t in targets:
+            for _ in targets:
                 TRANSLATIONS_TOTAL.labels(
                     backend=backend_str, cached="true", source_lang=source_lang,
                 ).inc()
@@ -62,11 +62,11 @@ class TranslationService:
         await self.cache.put_translations(text, source_lang, backend_str, fresh)
 
         merged = {**cached, **fresh}
-        for t in cached:
+        for _ in cached:
             TRANSLATIONS_TOTAL.labels(
                 backend=backend_str, cached="true", source_lang=source_lang,
             ).inc()
-        for t in fresh:
+        for _ in fresh:
             TRANSLATIONS_TOTAL.labels(
                 backend=backend_str, cached="false", source_lang=source_lang,
             ).inc()

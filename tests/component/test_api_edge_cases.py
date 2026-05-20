@@ -34,7 +34,9 @@ class InMemoryCache:
             self.translations[(text, source_lang, t, backend)] = v
 
     async def get_embedding(self, text, backend):
-        return list(self.embeddings[(text, backend)]) if (text, backend) in self.embeddings else None
+        if (text, backend) not in self.embeddings:
+            return None
+        return list(self.embeddings[(text, backend)])
 
     async def put_embedding(self, text, backend, vector):
         self.embeddings[(text, backend)] = list(vector)

@@ -27,7 +27,9 @@ class Settings(BaseSettings):
     mistral_max_retries: int = Field(default=3)
 
     # Stability
-    breaker_failure_threshold: float = Field(default=0.05, description="Open above this ratio in window.")
+    breaker_failure_threshold: float = Field(
+        default=0.05, description="Open above this ratio in window."
+    )
     breaker_window_s: int = Field(default=60)
     breaker_cooldown_s: int = Field(default=30)
     breaker_min_requests: int = Field(default=20)

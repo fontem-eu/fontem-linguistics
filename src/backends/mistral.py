@@ -30,8 +30,11 @@ _LANG_FULLNAMES = {
 }
 
 
+# MistralBackend is a configuration-bag dataclass for a single hosted backend;
+# splitting the 10 fields into sub-structs would obscure that they all map
+# directly to env vars in infra/config.py.
 @dataclass
-class MistralBackend:
+class MistralBackend:  # pylint: disable=too-many-instance-attributes
     api_url: str
     api_key: str
     chat_model: str
@@ -54,7 +57,9 @@ class MistralBackend:
         return f"mistral-embed@api-{self.embed_model}"
 
     @classmethod
-    def build(
+    # Keyword-only factory mirroring the dataclass fields one-to-one; named
+    # parameters at the call site beat any kwargs-dict alternative.
+    def build(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         cls,
         api_url: str,
         api_key: str,
@@ -134,7 +139,11 @@ class MistralBackend:
         except (KeyError, IndexError) as exc:
             raise MistralError(f"malformed embed response: {exc}") from exc
 
-        if not isinstance(vec, list) or not vec or not all(isinstance(v, (int, float)) for v in vec):
+        if (
+            not isinstance(vec, list)
+            or not vec
+            or not all(isinstance(v, (int, float)) for v in vec)
+        ):
             raise MistralError("embed response vector is malformed")
 
         usage = data.get("usage") or {}

@@ -21,15 +21,15 @@ from src.services.translation import TranslationService
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    settings: Settings = app.state.settings
+async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
+    settings: Settings = application.state.settings
 
     cache = await PostgresCache.connect(
         dsn=_asyncpg_dsn(settings.database_url),
         lru_size=settings.inprocess_lru_size,
     )
     await _ensure_schema(cache)
-    app.state.cache = cache
+    application.state.cache = cache
 
     mistral: MistralBackend | None = None
     if settings.mistral_api_key:
@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         cache=cache, mistral=mistral, labse=labse,
         mistral_breaker=breaker, mistral_spend_cap=spend_cap,
     )
-    app.state.services = Services(translation=translation, embedding=embedding)
+    application.state.services = Services(translation=translation, embedding=embedding)
     logger.info("fontem-linguistics ready (mistral={}, nllb={}, labse={})",
                 mistral is not None, True, True)
 
