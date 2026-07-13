@@ -1,6 +1,7 @@
 """Extra route coverage: readyz, batch circuit-open, embed spend-cap, IDEMP overflow."""
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 
 import httpx
@@ -133,9 +134,10 @@ def test_embed_spend_cap_429():
 
 
 def test_embed_circuit_open_503():
-    from asyncio import get_event_loop
+    # asyncio.run, not get_event_loop().run_until_complete — Python 3.14
+    # removed implicit loop creation in threads without a running loop.
     breaker = CircuitBreaker(failure_threshold=0.0, min_requests=1)
-    get_event_loop().run_until_complete(breaker.record_failure())
+    asyncio.run(breaker.record_failure())
     app, _ = _build_app(breaker=breaker)
     r = TestClient(app).post("/embed", json={"text": "hi", "backend": "mistral-embed"})
     assert r.status_code == 503

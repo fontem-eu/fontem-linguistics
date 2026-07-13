@@ -152,11 +152,12 @@ def test_translate_400_on_missing_targets(app_and_state):
 def test_translate_returns_503_when_breaker_open(app_and_state):
     app, _stub, breaker, _cap = app_and_state
     client = TestClient(app)
-    # Force the breaker open.
+    # Force the breaker open. asyncio.run, not get_event_loop() — Python
+    # 3.14 removed implicit loop creation in threads without a running loop.
     breaker.failure_threshold = 0.0
     breaker.min_requests = 1
     import asyncio
-    asyncio.get_event_loop().run_until_complete(breaker.record_failure())
+    asyncio.run(breaker.record_failure())
 
     r = client.post("/translate", json={
         "text": "x", "source_lang": "en",
@@ -278,3 +279,31 @@ def test_metrics_exposes_prometheus(app_and_state):
     r = client.get("/metrics")
     assert r.status_code == 200
     assert "translations_total" in r.text
+
+
+def test_keywords_endpoint_happy_path(app_and_state):
+    app, *_ = app_and_state
+    client = TestClient(app)
+    r = client.post("/keywords", json={
+        "text": "the directive on combating violence against women",
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["lang"] == "en"
+    assert body["keywords"] == ["directive", "combating", "violence", "women"]
+    assert "the" in body["removed"]
+
+
+def test_keywords_endpoint_rejects_blank_text(app_and_state):
+    app, *_ = app_and_state
+    client = TestClient(app)
+    r = client.post("/keywords", json={"text": "   "})
+    assert r.status_code == 400
+
+
+def test_keywords_endpoint_explicit_lang(app_and_state):
+    app, *_ = app_and_state
+    client = TestClient(app)
+    r = client.post("/keywords", json={"text": "die Verordnung", "lang": "de"})
+    assert r.status_code == 200
+    assert r.json()["keywords"] == ["verordnung"]
