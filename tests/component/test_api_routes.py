@@ -152,11 +152,12 @@ def test_translate_400_on_missing_targets(app_and_state):
 def test_translate_returns_503_when_breaker_open(app_and_state):
     app, _stub, breaker, _cap = app_and_state
     client = TestClient(app)
-    # Force the breaker open.
+    # Force the breaker open. asyncio.run, not get_event_loop() — Python
+    # 3.14 removed implicit loop creation in threads without a running loop.
     breaker.failure_threshold = 0.0
     breaker.min_requests = 1
     import asyncio
-    asyncio.get_event_loop().run_until_complete(breaker.record_failure())
+    asyncio.run(breaker.record_failure())
 
     r = client.post("/translate", json={
         "text": "x", "source_lang": "en",
