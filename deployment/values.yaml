@@ -36,3 +36,9 @@ resources:
   limits:
     memory: "6Gi"
     cpu: "2"
+
+# Scheduling. The prod instance pins to the production node (which is
+# tainted); the dev instance leaves both empty and floats on the
+# development nodes.
+nodeSelector: {}
+tolerations: []

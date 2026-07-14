@@ -18,6 +18,14 @@ spec:
       labels:
         app: fontem-linguistics
     spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       imagePullSecrets:
         - name: regcred
       volumes:
