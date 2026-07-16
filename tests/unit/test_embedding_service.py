@@ -46,15 +46,36 @@ class FakeMistral:
         return list(self.vector)
 
 
-class _FakeLabse:
-    def __init__(self, vec=None, encoder_id="labse@1.0.0-test000"):
-        self.vec = vec or [0.1] * 768
+class _FakeMinilm:
+    def __init__(self, vec=None, encoder_id="minilm@1.0.0-test000"):
+        self.vec = vec or [0.2] * 384
         self.call_count = 0
+        self.batch_calls: list[list[str]] = []
         self.encoder_id = encoder_id
 
     async def embed(self, text):
         self.call_count += 1
         return list(self.vec)
+
+    async def embed_batch(self, texts):
+        self.batch_calls.append(list(texts))
+        return [list(self.vec) for _ in texts]
+
+
+class _FakeLabse:
+    def __init__(self, vec=None, encoder_id="labse@1.0.0-test000"):
+        self.vec = vec or [0.1] * 768
+        self.call_count = 0
+        self.batch_calls: list[list[str]] = []
+        self.encoder_id = encoder_id
+
+    async def embed(self, text):
+        self.call_count += 1
+        return list(self.vec)
+
+    async def embed_batch(self, texts):
+        self.batch_calls.append(list(texts))
+        return [list(self.vec) for _ in texts]
 
 
 def _mk(cache=None, mistral=None, labse=None, minilm=None) -> EmbeddingService:
@@ -166,3 +187,80 @@ async def test_transient_failure_releases_reservation():
     with pytest.raises(MistralTransientError):
         await svc.embed("x", EmbeddingBackend.MISTRAL_EMBED)
     assert await cap.spent() == pytest.approx(0.0)
+
+
+async def test_embed_batch_empty_returns_empty():
+    svc = _mk(labse=_FakeLabse())
+    r = await svc.embed_batch([], EmbeddingBackend.LABSE_LOCAL)
+    assert r == []
+
+
+async def test_embed_batch_all_misses_hits_backend_once():
+    """N misses → one embed_batch call with all texts; results ordered."""
+    labse = _FakeLabse()
+    svc = _mk(labse=labse)
+    r = await svc.embed_batch(["a", "b", "c"], EmbeddingBackend.LABSE_LOCAL)
+    assert [x.cached for x in r] == [False, False, False]
+    assert [x.dim for x in r] == [768, 768, 768]
+    assert labse.batch_calls == [["a", "b", "c"]]
+    assert labse.call_count == 0  # single-text path not touched
+
+
+async def test_embed_batch_mixed_cache_hit_skips_cached_texts():
+    """Cache hit for 'a', misses for 'b','c' → backend called only with ['b','c']."""
+    cache = FakeCache()
+    cache.embeddings[("a", "labse-local")] = [0.9] * 768
+    labse = _FakeLabse()
+    svc = _mk(cache=cache, labse=labse)
+    r = await svc.embed_batch(["a", "b", "c"], EmbeddingBackend.LABSE_LOCAL)
+    assert [x.cached for x in r] == [True, False, False]
+    assert labse.batch_calls == [["b", "c"]]
+    # Every text seeded into cache after run
+    assert set(cache.embeddings.keys()) == {
+        ("a", "labse-local"),
+        ("b", "labse-local"),
+        ("c", "labse-local"),
+    }
+
+
+async def test_embed_batch_rejects_empty_text():
+    labse = _FakeLabse()
+    svc = _mk(labse=labse)
+    with pytest.raises(ValueError):
+        await svc.embed_batch(["ok", "  "], EmbeddingBackend.LABSE_LOCAL)
+
+
+async def test_embed_batch_unavailable_backend():
+    svc = _mk(labse=None)
+    with pytest.raises(BackendUnavailable):
+        await svc.embed_batch(["a"], EmbeddingBackend.LABSE_LOCAL)
+
+
+async def test_embed_batch_mistral_falls_back_per_text():
+    """No server-side batch for Mistral; wrapper loops per-text."""
+    mistral = FakeMistral()
+    svc = _mk(mistral=mistral)
+    r = await svc.embed_batch(["x", "y"], EmbeddingBackend.MISTRAL_EMBED)
+    assert len(r) == 2
+    assert all(x.encoder_id == mistral.embed_encoder_id for x in r)
+    assert mistral.call_count == 2
+
+async def test_embed_batch_minilm_backend():
+    """MiniLM branch in _call_backend_batch is exercised."""
+    minilm = _FakeMinilm()
+    svc = _mk(minilm=minilm)
+    r = await svc.embed_batch(["hola", "adios"], EmbeddingBackend.MINILM_LOCAL)
+    assert [x.dim for x in r] == [384, 384]
+    assert minilm.batch_calls == [["hola", "adios"]]
+
+
+async def test_embed_batch_minilm_unavailable_when_none():
+    svc = _mk(minilm=None)
+    with pytest.raises(BackendUnavailable):
+        await svc.embed_batch(["x"], EmbeddingBackend.MINILM_LOCAL)
+
+
+async def test_embed_batch_mistral_unavailable_when_none():
+    svc = _mk(mistral=None)
+    with pytest.raises(BackendUnavailable):
+        await svc.embed_batch(["x"], EmbeddingBackend.MISTRAL_EMBED)

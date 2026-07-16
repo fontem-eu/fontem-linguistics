@@ -279,3 +279,55 @@ def test_metrics_exposes_prometheus(app_and_state):
     r = client.get("/metrics")
     assert r.status_code == 200
     assert "translations_total" in r.text
+
+
+def test_embed_batch_route_happy(app_and_state):
+    """Batched /embed_batch returns one result per text via mistral backend."""
+    app, _stub, *_ = app_and_state
+    client = TestClient(app)
+    payload = {"texts": ["hola mundo", "hello world"], "backend": "mistral-embed"}
+    r = client.post("/embed_batch", json=payload)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["backend"] == "mistral-embed"
+    assert body["dim"] == 1024
+    assert body["encoder_id"].startswith("mistral-embed@")
+    assert len(body["results"]) == 2
+    for res in body["results"]:
+        assert res["backend"] == "mistral-embed"
+        assert len(res["vector"]) == 1024
+
+
+def test_embed_batch_route_mixed_cache(app_and_state):
+    """Text already in cache is reported cached=True; miss is embedded."""
+    app, stub, *_ = app_and_state
+    client = TestClient(app)
+    # Prime the cache with one text
+    client.post("/embed", json={"text": "hola", "backend": "mistral-embed"})
+    calls_before = sum(1 for c in stub.calls if c[0] == "embed")
+    r = client.post("/embed_batch", json={
+        "texts": ["hola", "nueva"],
+        "backend": "mistral-embed",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert [x["cached"] for x in body["results"]] == [True, False]
+    calls_after = sum(1 for c in stub.calls if c[0] == "embed")
+    # Only the miss actually hit the backend
+    assert calls_after - calls_before == 1
+
+
+def test_embed_batch_empty_texts_422(app_and_state):
+    app, *_ = app_and_state
+    client = TestClient(app)
+    r = client.post("/embed_batch", json={"texts": [], "backend": "mistral-embed"})
+    assert r.status_code == 422
+
+
+def test_embed_batch_over_max_size_422(app_and_state):
+    app, *_ = app_and_state
+    client = TestClient(app)
+    r = client.post("/embed_batch", json={
+        "texts": ["x"] * 300, "backend": "mistral-embed",
+    })
+    assert r.status_code == 422

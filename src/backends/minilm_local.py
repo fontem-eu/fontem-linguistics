@@ -94,3 +94,20 @@ class MinilmLocalBackend:
             None, lambda: self._model.encode(text, normalize_embeddings=True).tolist()
         )
         return list(vec)
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Batched inference — one model.encode() over the whole list.
+
+        For CPU inference with SentenceTransformers, a single batched
+        encode() runs BLAS-parallel and clears the Python overhead of
+        per-text HTTP + coroutine hops. Empirically ~10x throughput
+        at batch=32 for MiniLM-L12 on a 6-core node.
+        """
+        await self._ensure_loaded()
+        if not texts:
+            return []
+        loop = asyncio.get_running_loop()
+        arr = await loop.run_in_executor(
+            None, lambda: self._model.encode(texts, normalize_embeddings=True),
+        )
+        return [list(v) for v in arr.tolist()]

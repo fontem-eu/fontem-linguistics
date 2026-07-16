@@ -48,3 +48,38 @@ async def test_embed_delegates_to_loaded_model(tmp_path, monkeypatch):
     assert isinstance(vec, list)
     assert len(vec) == 384
     assert vec[0] == pytest.approx(0.1)
+
+async def test_embed_batch_delegates_to_loaded_model(tmp_path):
+    """embed_batch runs one encode(list) call and returns list-of-vectors,
+    order preserved."""
+    b = MinilmLocalBackend(
+        model_path=str(tmp_path),
+        encoder_id="minilm@0.0.0-test",
+    )
+    b._loaded = True  # pylint: disable=protected-access
+
+    class _Batch:
+        def encode(self, texts, normalize_embeddings):
+            assert normalize_embeddings is True
+            assert isinstance(texts, list)
+            return _Arr([[float(i)] * 384 for i in range(len(texts))])
+
+    class _Arr(list):
+        def tolist(self):
+            return list(self)
+
+    b._model = _Batch()  # pylint: disable=protected-access
+    vecs = await b.embed_batch(["a", "b", "c"])
+    assert [v[0] for v in vecs] == [0.0, 1.0, 2.0]
+    assert all(len(v) == 384 for v in vecs)
+
+
+async def test_embed_batch_empty_returns_empty(tmp_path):
+    """No-op fast path: an empty list short-circuits before touching the model."""
+    b = MinilmLocalBackend(
+        model_path=str(tmp_path),
+        encoder_id="minilm@0.0.0-test",
+    )
+    # No model attached — should not be touched.
+    b._loaded = True  # pylint: disable=protected-access
+    assert await b.embed_batch([]) == []

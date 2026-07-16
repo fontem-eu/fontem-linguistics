@@ -56,6 +56,61 @@ class EmbeddingService:
             cached=False, encoder_id=encoder_id,
         )
 
+    async def embed_batch(
+        self, texts: list[str], backend: EmbeddingBackend,
+    ) -> list[EmbeddingResult]:
+        """Batched /embed. Cache hits skipped; misses batched into one
+        model.encode() call on the backend for BLAS-parallel throughput.
+        Only supported for local (SentenceTransformer) backends today;
+        mistral falls back to per-text calls (still saves HTTP hops)."""
+        if not texts:
+            return []
+        backend_str = backend.value
+        encoder_id = self._encoder_id(backend)
+
+        # Fetch cached vectors up front.
+        cached_vecs: list[list[float] | None] = []
+        for t in texts:
+            if not t or not t.strip():
+                raise ValueError("text must be non-empty")
+            cached_vecs.append(await self.cache.get_embedding(t, backend_str))
+
+        # Batch-encode the misses on the backend.
+        miss_idx = [i for i, v in enumerate(cached_vecs) if v is None]
+        if miss_idx:
+            miss_texts = [texts[i] for i in miss_idx]
+            miss_vecs = await self._call_backend_batch(miss_texts, backend)
+            for i, v in zip(miss_idx, miss_vecs):
+                cached_vecs[i] = v
+                await self.cache.put_embedding(texts[i], backend_str, v)
+                EMBEDDINGS_TOTAL.labels(backend=backend_str, cached="false").inc()
+        for i in range(len(texts)):
+            if i not in miss_idx:
+                EMBEDDINGS_TOTAL.labels(backend=backend_str, cached="true").inc()
+
+        return [
+            EmbeddingResult(
+                vector=v, dim=len(v), backend=backend,
+                cached=(i not in miss_idx), encoder_id=encoder_id,
+            )
+            for i, v in enumerate(cached_vecs)
+        ]
+
+    async def _call_backend_batch(
+        self, texts: list[str], backend: EmbeddingBackend,
+    ) -> list[list[float]]:
+        if backend is EmbeddingBackend.LABSE_LOCAL:
+            if self.labse is None:
+                raise BackendUnavailable("labse-local backend not configured")
+            return await self.labse.embed_batch(texts)
+        if backend is EmbeddingBackend.MINILM_LOCAL:
+            if self.minilm is None:
+                raise BackendUnavailable("minilm-local backend not configured")
+            return await self.minilm.embed_batch(texts)
+        # Mistral: no server-side batch; loop with per-text /embed. Still
+        # saves the HTTP overhead on the linguistics ↔ client hop.
+        return [await self._call_backend(t, backend) for t in texts]
+
     def _encoder_id(self, backend: EmbeddingBackend) -> str:
         """Resolve the signed-mirror identity of the active encoder.
 

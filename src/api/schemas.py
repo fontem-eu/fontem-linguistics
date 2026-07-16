@@ -79,3 +79,14 @@ class LanguageInfo(BaseModel):
 
 class LanguagesResponse(BaseModel):
     languages: list[LanguageInfo]
+
+class EmbedBatchRequest(BaseModel):
+    texts: list[str] = Field(min_length=1, max_length=256)
+    backend: EmbeddingBackend
+
+
+class EmbedBatchResponse(BaseModel):
+    backend: EmbeddingBackend
+    dim: int
+    encoder_id: str
+    results: list[EmbedResponse]

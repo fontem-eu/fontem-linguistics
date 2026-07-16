@@ -11,6 +11,8 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from src.api.deps import Services
 from src.api.schemas import (
+    EmbedBatchRequest,
+    EmbedBatchResponse,
     BatchTranslateRequest,
     BatchTranslateResponse,
     EmbedRequest,
@@ -232,3 +234,53 @@ async def readyz(request: Request) -> dict:
 @router.get("/metrics")
 async def metrics() -> Response:
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+@router.post(
+    "/embed_batch",
+    response_model=EmbedBatchResponse,
+    responses={
+        400: {"description": "Invalid input."},
+        503: {"description": "Configured backend unavailable / circuit open."},
+    },
+)
+async def embed_batch(req: EmbedBatchRequest, request: Request) -> EmbedBatchResponse:
+    """Batched embed — one HTTP round-trip, one BLAS-batched model call.
+
+    Same semantics per element as /embed; ordering preserved. Cache
+    hits are per text so mixed batches (some cached, some new) are fine.
+    """
+    try:
+        results = await _services(request).embedding.embed_batch(req.texts, req.backend)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CircuitOpen as exc:
+        raise HTTPException(
+            status_code=503, detail=str(exc),
+            headers={"X-Backend-State": "circuit-open"},
+        ) from exc
+    except SpendCapExceeded as exc:
+        raise HTTPException(
+            status_code=429, detail=str(exc),
+            headers={"X-Backend-State": "spend-cap-exceeded"},
+        ) from exc
+    except BackendUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail=str(exc),
+            headers={"X-Backend-State": "unavailable"},
+        ) from exc
+
+    if not results:
+        return EmbedBatchResponse(
+            backend=req.backend, dim=0, encoder_id="",
+            results=[],
+        )
+    return EmbedBatchResponse(
+        backend=req.backend, dim=results[0].dim, encoder_id=results[0].encoder_id,
+        results=[
+            EmbedResponse(
+                cached=r.cached, backend=r.backend, dim=r.dim,
+                vector=r.vector, encoder_id=r.encoder_id,
+            )
+            for r in results
+        ],
+    )
