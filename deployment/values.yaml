@@ -57,3 +57,5 @@ resources:
 # development nodes.
 nodeSelector: {}
 tolerations: []
+
+modelsVolumeSize: "10Gi"

@@ -116,3 +116,21 @@ spec:
             failureThreshold: 6
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fontem-linguistics-models
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # PVC holds mirrored model bytes (LaBSE + MiniLM, ~4 GB after download).
+    # Argo would otherwise recreate/patch on chart drift and blow the volume
+    # away; PVC.spec is immutable, so any accidental storageClassName drift
+    # loops forever. Both guards below prevent that.
+    argocd.argoproj.io/sync-options: "Prune=false,Delete=false"
+spec:
+  storageClassName: local-path
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.modelsVolumeSize | default "10Gi" }}

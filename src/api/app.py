@@ -79,6 +79,20 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
         mistral_breaker=breaker, mistral_spend_cap=spend_cap,
     )
     application.state.services = Services(translation=translation, embedding=embedding)
+
+    # Warm the local encoder-only backends BEFORE opening the port.
+    # First-request cold-start on SentenceTransformer.encode is ~3s for
+    # MiniLM and ~2s for LaBSE; without this preload the first /embed
+    # after every pod restart hangs downstream callers (fontem-api
+    # search falls back to lexical_only after its 3s timeout). NLLB
+    # is translation-only and heavier; leave it lazy.
+    for name, backend in (("labse", labse), ("minilm", minilm)):
+        try:
+            await backend.embed("warmup")
+            logger.info("{} preload OK", name)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("{} preload skipped: {}", name, exc)
+
     logger.info(
         "fontem-linguistics ready (mistral={}, nllb={}, labse={}, minilm={})",
         mistral is not None, True, True, True,
