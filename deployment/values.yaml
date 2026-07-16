@@ -2,7 +2,16 @@ version: "dev"
 databaseUrl: "postgresql+asyncpg://linguistics:$(POSTGRES_PASSWORD)@postgresql:5432/linguistics"
 mistralApiUrl: "https://api.mistral.ai/v1"
 mistralChatModel: "mistral-medium-latest"
-mistralEmbedModel: "mistral-embed"
+# Pinned to the versioned tag. 'mistral-embed' is a moving alias that
+# Mistral resolves server-side; pinning to the dated ID means our
+# encoder_id (mistral-embed@api-mistral-embed-2312) reflects the actual
+# model bits and a silent upstream bump can't corrupt embedding
+# comparisons in place. Verified on 2026-07-16: 'mistral-embed' aliases
+# to 'mistral-embed-2312' with identical output.
+# Bump procedure: check https://api.mistral.ai/v1/models, pick the new
+# versioned id, update here, plan a re-embed pass because encoder_id
+# changes → old vectors are no longer comparable to new ones.
+mistralEmbedModel: "mistral-embed-2312"
 spendCapUsdDaily: "50.0"
 breakerFailureThreshold: "0.05"
 breakerWindowS: "60"
