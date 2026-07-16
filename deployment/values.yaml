@@ -39,7 +39,6 @@ minilmEncoderId: "minilm@1.0.0-e8f8c21"
 # keys credentials under a different host entry and would miss the auth.
 labseMirrorRef: "contribute.void42.internal/golden/models/labse"
 inprocessLruSize: "4096"
-modelsVolumeSize: "10Gi"
 replicas: 1
 resources:
   requests:
