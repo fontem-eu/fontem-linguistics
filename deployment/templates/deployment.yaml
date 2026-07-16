@@ -29,9 +29,71 @@ spec:
       imagePullSecrets:
         - name: regcred
       volumes:
+        # Models materialised at pod start by the fetch-models initContainer.
+        # emptyDir is per-pod so we can horizontally scale (no RWO PVC lock);
+        # cost is ~60-90s cold-start per pod paying the model download once.
         - name: models
-          persistentVolumeClaim:
-            claimName: fontem-linguistics-models
+          emptyDir:
+            sizeLimit: {{ .Values.modelsVolumeSize | default "10Gi" }}
+      initContainers:
+        - name: fetch-models
+          image: contribute.void42.internal/void42/ci-python:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              pip install --quiet --no-cache-dir huggingface_hub
+              python - <<'PY'
+              import os
+              from huggingface_hub import snapshot_download
+              targets = [
+                  (os.environ["LABSE_REPO"], os.environ["LABSE_REV"],
+                   os.environ["LABSE_MODEL_PATH"]),
+                  (os.environ["MINILM_REPO"], os.environ["MINILM_REV"],
+                   os.environ["MINILM_MODEL_PATH"]),
+              ]
+              for repo, rev, dest in targets:
+                  # Skip if the dir already exists AND has the sentinel config
+                  # file — makes pod restarts on an emptyDir a no-op the second
+                  # time (relevant only if the pod restarts without reschedule).
+                  if os.path.isfile(os.path.join(dest, "config.json")):
+                      print(f"[fetch] {repo}@{rev[:7]} already present at {dest}")
+                      continue
+                  print(f"[fetch] {repo}@{rev[:7]} -> {dest}")
+                  snapshot_download(
+                      repo_id=repo,
+                      revision=rev,
+                      local_dir=dest,
+                      allow_patterns=[
+                          "config.json", "tokenizer*", "special_tokens_map*",
+                          "sentence_bert_config.json", "modules.json",
+                          "1_Pooling/*", "2_Normalize/*",
+                          "*.safetensors", "*.bin",
+                      ],
+                  )
+              print("[fetch] done")
+              PY
+          env:
+            - name: LABSE_REPO
+              value: {{ .Values.labseHfRepo | default "sentence-transformers/LaBSE" | quote }}
+            - name: LABSE_REV
+              value: {{ .Values.labseHfRevision | default "836121a0533e5664b21c7aacc5d22951f2b8b25b" | quote }}
+            - name: LABSE_MODEL_PATH
+              value: "{{ .Values.localModelsPath }}/labse-{{ .Values.labseMirrorVersion }}"
+            - name: MINILM_REPO
+              value: {{ .Values.minilmHfRepo | default "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2" | quote }}
+            - name: MINILM_REV
+              value: {{ .Values.minilmHfRevision | default "e8f8c211226b894fcb81acc59f3b34ba3efd5f42" | quote }}
+            - name: MINILM_MODEL_PATH
+              value: "{{ .Values.localModelsPath }}/minilm-{{ .Values.minilmMirrorVersion }}"
+          resources:
+            requests: { cpu: "200m", memory: "512Mi" }
+            limits:   { cpu: "1",    memory: "2Gi" }
+          volumeMounts:
+            - name: models
+              mountPath: {{ .Values.localModelsPath | quote }}
       containers:
         - name: api
           image: contribute.void42.internal/golden/fontem-linguistics:{{ .Values.version }}
@@ -116,21 +178,3 @@ spec:
             failureThreshold: 6
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: fontem-linguistics-models
-  namespace: {{ .Release.Namespace }}
-  annotations:
-    # PVC holds mirrored model bytes (LaBSE + MiniLM, ~4 GB after download).
-    # Argo would otherwise recreate/patch on chart drift and blow the volume
-    # away; PVC.spec is immutable, so any accidental storageClassName drift
-    # loops forever. Both guards below prevent that.
-    argocd.argoproj.io/sync-options: "Prune=false,Delete=false"
-spec:
-  storageClassName: local-path
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: {{ .Values.modelsVolumeSize | default "10Gi" }}

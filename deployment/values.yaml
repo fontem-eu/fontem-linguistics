@@ -30,6 +30,16 @@ labseEncoderId: "labse@1.0.0-836121a"
 # to HF revision e8f8c211... (lastModified 2026-01-28, verified 2026-07-16).
 # Same rules as labseMirrorVersion: bump together with mirror workflow.
 minilmModel: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+# HuggingFace source pins for the initContainer fetch-models step.
+# Bump together with labseMirrorVersion / labseEncoderId when moving to
+# a new HF revision. SHA MUST be full 40-char commit sha, not tag or
+# branch — that's the reproducibility guarantee.
+labseHfRepo: "sentence-transformers/LaBSE"
+labseHfRevision: "836121a0533e5664b21c7aacc5d22951f2b8b25b"
+minilmHfRepo: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+minilmHfRevision: "e8f8c211226b894fcb81acc59f3b34ba3efd5f42"
+
 minilmMirrorVersion: "1.0.0"
 minilmEncoderId: "minilm@1.0.0-e8f8c21"
 # Registry reference for the mirrored artifact. Uses the HTTPS / ingress
@@ -39,7 +49,7 @@ minilmEncoderId: "minilm@1.0.0-e8f8c21"
 # keys credentials under a different host entry and would miss the auth.
 labseMirrorRef: "contribute.void42.internal/golden/models/labse"
 inprocessLruSize: "4096"
-replicas: 1
+replicas: 2
 resources:
   requests:
     memory: "1Gi"
