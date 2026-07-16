@@ -60,6 +60,22 @@ class Settings(BaseSettings):
             "was pushed by the mirror-labse workflow."
         ),
     )
+    # paraphrase-multilingual-MiniLM-L12-v2 — 384-dim, ~2-3x faster than
+    # LaBSE on CPU. Same InitContainer-populated-path convention as LaBSE.
+    minilm_model: str = Field(
+        default="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    )
+    minilm_model_path: str = Field(
+        default="/models/minilm-1.0.0",
+        description="Filesystem path to the mirrored MiniLM snapshot.",
+    )
+    minilm_encoder_id: str = Field(
+        default="minilm@1.0.0-e8f8c21",
+        description=(
+            "Signed-mirror identity of the loaded MiniLM, surfaced on every "
+            "/embed response. Must match the mirror-minilm artifact tag."
+        ),
+    )
     local_models_path: str = Field(default="/models")
     # Dynamic int8 quantisation on nn.Linear layers. Intuition says this
     # should shrink the resident footprint; in practice, measured on

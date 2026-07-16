@@ -82,7 +82,7 @@ def app_and_state():
         mistral_breaker=breaker, mistral_spend_cap=cap,
     )
     embedding = EmbeddingService(
-        cache=cache, mistral=mistral, labse=None,
+        cache=cache, mistral=mistral, labse=None, minilm=None,
         mistral_breaker=breaker, mistral_spend_cap=cap,
     )
     app = FastAPI()

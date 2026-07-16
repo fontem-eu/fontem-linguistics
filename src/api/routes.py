@@ -192,6 +192,8 @@ async def models(request: Request) -> ModelsResponse:
             encoder_ids["mistral-embed"] = services.embedding.mistral.embed_encoder_id
         if services.embedding.labse is not None:
             encoder_ids["labse-local"] = services.embedding.labse.encoder_id
+        if services.embedding.minilm is not None:
+            encoder_ids["minilm-local"] = services.embedding.minilm.encoder_id
     return ModelsResponse(models=[
         ModelInfoResponse(
             backend=m.backend, kind=m.kind, quality_score=m.quality_score,

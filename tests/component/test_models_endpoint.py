@@ -19,7 +19,7 @@ def test_models_endpoint_lists_all_backends():
     assert r.status_code == 200
     body = r.json()
     names = {m["backend"] for m in body["models"]}
-    assert names == {"mistral", "nllb-local", "mistral-embed", "labse-local"}
+    assert names == {"mistral", "nllb-local", "mistral-embed", "labse-local", "minilm-local"}
 
 
 def test_models_have_quality_scores_in_range():
@@ -46,6 +46,8 @@ def test_embedding_backends_expose_dim():
     labse = next(m for m in body["models"] if m["backend"] == "labse-local")
     assert mistral_e["dim"] == 1024
     assert labse["dim"] == 768
+    minilm = next(m for m in body["models"] if m["backend"] == "minilm-local")
+    assert minilm["dim"] == 384
 
 
 def test_translation_backends_have_null_dim():

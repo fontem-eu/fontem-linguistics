@@ -1,0 +1,7 @@
+# Source of truth for which MiniLM revision we mirror.
+# Bumping this file is the way to a new mirror tag; the encoder_id in
+# values.yaml (minilmEncoderId) must move together with it.
+
+hf_repo: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+hf_revision: e8f8c211226b894fcb81acc59f3b34ba3efd5f42
+mirror_version: "1.0.0"

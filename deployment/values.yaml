@@ -25,6 +25,13 @@ localModelsPath: "/models"
 # running the workflow with a new mirror_version or hf_revision.
 labseMirrorVersion: "1.0.0"
 labseEncoderId: "labse@1.0.0-836121a"
+
+# MiniLM signed-mirror — paraphrase-multilingual-MiniLM-L12-v2 pinned
+# to HF revision e8f8c211... (lastModified 2026-01-28, verified 2026-07-16).
+# Same rules as labseMirrorVersion: bump together with mirror workflow.
+minilmModel: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+minilmMirrorVersion: "1.0.0"
+minilmEncoderId: "minilm@1.0.0-e8f8c21"
 # Registry reference for the mirrored artifact. Uses the HTTPS / ingress
 # hostname (contribute.void42.internal) so the initContainer authenticates
 # with the same dockerconfigjson that kubelet uses for imagePullSecrets.

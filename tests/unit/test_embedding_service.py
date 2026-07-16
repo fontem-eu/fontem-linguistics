@@ -57,11 +57,12 @@ class _FakeLabse:
         return list(self.vec)
 
 
-def _mk(cache=None, mistral=None, labse=None) -> EmbeddingService:
+def _mk(cache=None, mistral=None, labse=None, minilm=None) -> EmbeddingService:
     return EmbeddingService(
         cache=cache or FakeCache(),
         mistral=mistral,
         labse=labse,
+        minilm=minilm,
         mistral_breaker=CircuitBreaker(),
         mistral_spend_cap=SpendCap(daily_cap_usd=10.0),
     )
@@ -158,7 +159,7 @@ async def test_transient_failure_releases_reservation():
     mistral = FakeMistral(raises=MistralTransientError("x"))
     cap = SpendCap(daily_cap_usd=10.0)
     svc = EmbeddingService(
-        cache=FakeCache(), mistral=mistral, labse=None,
+        cache=FakeCache(), mistral=mistral, labse=None, minilm=None,
         mistral_breaker=CircuitBreaker(failure_threshold=1.0, min_requests=1000),
         mistral_spend_cap=cap,
     )

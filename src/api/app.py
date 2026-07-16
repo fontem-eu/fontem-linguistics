@@ -10,6 +10,7 @@ from loguru import logger
 from src.api.deps import Services
 from src.api.routes import router
 from src.backends.labse_local import LabseLocalBackend
+from src.backends.minilm_local import MinilmLocalBackend
 from src.backends.mistral import MistralBackend
 from src.backends.nllb_local import NllbLocalBackend
 from src.cache.postgres import PostgresCache
@@ -55,6 +56,11 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
         encoder_id=settings.labse_encoder_id,
         quantize=settings.local_quantize_int8,
     )
+    minilm = MinilmLocalBackend(
+        model_path=settings.minilm_model_path,
+        encoder_id=settings.minilm_encoder_id,
+        quantize=settings.local_quantize_int8,
+    )
 
     breaker = CircuitBreaker(
         failure_threshold=settings.breaker_failure_threshold,
@@ -69,12 +75,14 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
         mistral_breaker=breaker, mistral_spend_cap=spend_cap,
     )
     embedding = EmbeddingService(
-        cache=cache, mistral=mistral, labse=labse,
+        cache=cache, mistral=mistral, labse=labse, minilm=minilm,
         mistral_breaker=breaker, mistral_spend_cap=spend_cap,
     )
     application.state.services = Services(translation=translation, embedding=embedding)
-    logger.info("fontem-linguistics ready (mistral={}, nllb={}, labse={})",
-                mistral is not None, True, True)
+    logger.info(
+        "fontem-linguistics ready (mistral={}, nllb={}, labse={}, minilm={})",
+        mistral is not None, True, True, True,
+    )
 
     try:
         yield

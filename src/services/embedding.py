@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from loguru import logger
 
 from src.backends.labse_local import LabseLocalBackend
+from src.backends.minilm_local import MinilmLocalBackend
 from src.backends.mistral import MistralBackend, MistralError, MistralTransientError
 from src.cache.postgres import PostgresCache
 from src.domain.models import (
@@ -25,6 +26,7 @@ class EmbeddingService:
     cache: PostgresCache
     mistral: MistralBackend | None
     labse: LabseLocalBackend | None
+    minilm: MinilmLocalBackend | None
     mistral_breaker: CircuitBreaker
     mistral_spend_cap: SpendCap
 
@@ -67,14 +69,24 @@ class EmbeddingService:
             if self.mistral is None:
                 raise BackendUnavailable("mistral backend not configured")
             return self.mistral.embed_encoder_id
-        if self.labse is None:
-            raise BackendUnavailable("labse-local backend not configured")
-        return self.labse.encoder_id
+        if backend is EmbeddingBackend.LABSE_LOCAL:
+            if self.labse is None:
+                raise BackendUnavailable("labse-local backend not configured")
+            return self.labse.encoder_id
+        if backend is EmbeddingBackend.MINILM_LOCAL:
+            if self.minilm is None:
+                raise BackendUnavailable("minilm-local backend not configured")
+            return self.minilm.encoder_id
+        raise BackendUnavailable(f"unknown embedding backend: {backend!r}")
 
     async def _call_backend(self, text: str, backend: EmbeddingBackend) -> list[float]:
         if backend is EmbeddingBackend.MISTRAL_EMBED:
             return await self._call_mistral(text)
-        return await self._call_labse(text)
+        if backend is EmbeddingBackend.LABSE_LOCAL:
+            return await self._call_labse(text)
+        if backend is EmbeddingBackend.MINILM_LOCAL:
+            return await self._call_minilm(text)
+        raise BackendUnavailable(f"unknown embedding backend: {backend!r}")
 
     async def _call_mistral(self, text: str) -> list[float]:
         if self.mistral is None:
@@ -99,3 +111,8 @@ class EmbeddingService:
         if self.labse is None:
             raise BackendUnavailable("labse-local backend not configured")
         return await self.labse.embed(text)
+
+    async def _call_minilm(self, text: str) -> list[float]:
+        if self.minilm is None:
+            raise BackendUnavailable("minilm-local backend not configured")
+        return await self.minilm.embed(text)

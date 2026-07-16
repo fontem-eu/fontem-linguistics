@@ -10,6 +10,9 @@ institutional text, spot-checked on EU-body names):
   labse-local      0.82   LaBSE — 109-language sentence embeddings; strong
                           on cross-lingual retrieval of institutional names,
                           behind Mistral on nuance.
+  minilm-local     0.72   Paraphrase-multilingual-MiniLM-L12-v2 — 384-dim,
+                          50+ languages, ~2-3x faster than LaBSE on CPU.
+                          Retrieval-shaped, sits behind LaBSE on nuance.
 
 These are guidance numbers for callers picking a tier, not scientific claims.
 Adjust upward/downward as real usage data accrues.
@@ -70,5 +73,17 @@ CATALOG: tuple[ModelInfo, ...] = (
         languages_supported=109,
         cost_tier="free",
         description="LaBSE — 768-dim cross-lingual sentence embeddings.",
+    ),
+    ModelInfo(
+        backend="minilm-local",
+        kind="embedding",
+        quality_score=0.72,
+        dim=384,
+        languages_supported=50,
+        cost_tier="free",
+        description=(
+            "paraphrase-multilingual-MiniLM-L12-v2 — 384-dim, "
+            "fast CPU sentence embeddings for high-throughput index sinks."
+        ),
     ),
 )

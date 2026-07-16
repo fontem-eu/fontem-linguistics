@@ -13,6 +13,7 @@ class TranslationBackend(str, Enum):
 class EmbeddingBackend(str, Enum):
     MISTRAL_EMBED = "mistral-embed"
     LABSE_LOCAL = "labse-local"
+    MINILM_LOCAL = "minilm-local"
 
 
 @dataclass(frozen=True)

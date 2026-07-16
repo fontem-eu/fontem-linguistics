@@ -81,6 +81,19 @@ spec:
               value: {{ .Values.nllbModel | quote }}
             - name: LABSE_MODEL
               value: {{ .Values.labseModel | quote }}
+            # LaBSE path + encoder-id are derived from labseMirrorVersion
+            # (see values.yaml). The service reads model bytes from the
+            # PVC path and stamps the encoder-id on every /embed reply.
+            - name: LABSE_MODEL_PATH
+              value: "{{ .Values.localModelsPath }}/labse-{{ .Values.labseMirrorVersion }}"
+            - name: LABSE_ENCODER_ID
+              value: {{ .Values.labseEncoderId | quote }}
+            - name: MINILM_MODEL
+              value: {{ .Values.minilmModel | quote }}
+            - name: MINILM_MODEL_PATH
+              value: "{{ .Values.localModelsPath }}/minilm-{{ .Values.minilmMirrorVersion }}"
+            - name: MINILM_ENCODER_ID
+              value: {{ .Values.minilmEncoderId | quote }}
             - name: LOCAL_MODELS_PATH
               value: {{ .Values.localModelsPath | quote }}
             - name: INPROCESS_LRU_SIZE

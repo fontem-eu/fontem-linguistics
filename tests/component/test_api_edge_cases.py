@@ -89,7 +89,7 @@ def _build_app(breaker=None, cap=None, pool_ok: bool = True):
         mistral_breaker=b, mistral_spend_cap=c,
     )
     embedding = EmbeddingService(
-        cache=cache, mistral=mistral, labse=None,
+        cache=cache, mistral=mistral, labse=None, minilm=None,
         mistral_breaker=b, mistral_spend_cap=c,
     )
     app = FastAPI()
