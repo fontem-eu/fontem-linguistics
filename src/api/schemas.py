@@ -49,18 +49,6 @@ class EmbedResponse(BaseModel):
     encoder_id: str
 
 
-class KeywordsRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=2048)
-    # ISO-639-1; unknown/uncovered codes degrade to pass-through, so this
-    # stays a plain string rather than an enum of the 24 EU codes.
-    lang: str | None = Field(default=None, min_length=2, max_length=8)
-
-
-class KeywordsResponse(BaseModel):
-    lang: str | None
-    tokens: list[str]
-    keywords: list[str]
-    removed: list[str]
 
 
 class ErrorResponse(BaseModel):

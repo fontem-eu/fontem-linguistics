@@ -279,31 +279,3 @@ def test_metrics_exposes_prometheus(app_and_state):
     r = client.get("/metrics")
     assert r.status_code == 200
     assert "translations_total" in r.text
-
-
-def test_keywords_endpoint_happy_path(app_and_state):
-    app, *_ = app_and_state
-    client = TestClient(app)
-    r = client.post("/keywords", json={
-        "text": "the directive on combating violence against women",
-    })
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["lang"] == "en"
-    assert body["keywords"] == ["directive", "combating", "violence", "women"]
-    assert "the" in body["removed"]
-
-
-def test_keywords_endpoint_rejects_blank_text(app_and_state):
-    app, *_ = app_and_state
-    client = TestClient(app)
-    r = client.post("/keywords", json={"text": "   "})
-    assert r.status_code == 400
-
-
-def test_keywords_endpoint_explicit_lang(app_and_state):
-    app, *_ = app_and_state
-    client = TestClient(app)
-    r = client.post("/keywords", json={"text": "die Verordnung", "lang": "de"})
-    assert r.status_code == 200
-    assert r.json()["keywords"] == ["verordnung"]

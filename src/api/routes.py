@@ -15,8 +15,6 @@ from src.api.schemas import (
     BatchTranslateResponse,
     EmbedRequest,
     EmbedResponse,
-    KeywordsRequest,
-    KeywordsResponse,
     LanguageInfo,
     LanguagesResponse,
     ModelInfoResponse,
@@ -25,7 +23,6 @@ from src.api.schemas import (
     TranslateResponse,
 )
 from src.domain.catalog import CATALOG
-from src.domain.keywords import extract_keywords
 from src.domain.languages import EU_OFFICIAL_LANGS, LANG_DISPLAY_NAMES
 from src.backends.mistral import MistralError, MistralTransientError
 from src.domain.models import (
@@ -203,29 +200,6 @@ async def models(request: Request) -> ModelsResponse:
         )
         for m in CATALOG
     ])
-
-
-@router.post(
-    "/keywords",
-    responses={400: {"description": "Text is empty after trimming."}},
-)
-async def keywords(req: KeywordsRequest) -> KeywordsResponse:
-    """Tokenize text and strip stop words (24 EU languages).
-
-    Stateless — no backend, cache or spend cap involved. When ``lang`` is
-    omitted the language is detected from stop-word hits; when neither an
-    explicit nor a detected language has a published list (e.g. Maltese),
-    tokens pass through unfiltered.
-    """
-    if not req.text.strip():
-        raise HTTPException(status_code=400, detail="text must be non-empty")
-    result = extract_keywords(req.text, req.lang)
-    return KeywordsResponse(
-        lang=result.lang,
-        tokens=result.tokens,
-        keywords=result.keywords,
-        removed=result.removed,
-    )
 
 
 @router.get("/languages")
