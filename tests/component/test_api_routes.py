@@ -331,3 +331,48 @@ def test_embed_batch_over_max_size_422(app_and_state):
         "texts": ["x"] * 300, "backend": "mistral-embed",
     })
     assert r.status_code == 422
+
+
+def test_embed_batch_unknown_backend_422(app_and_state):
+    """Backend is an enum on the request schema — an unknown name must be
+    rejected at validation time (4xx), never forwarded to a backend."""
+    app, *_ = app_and_state
+    client = TestClient(app)
+    r = client.post("/embed_batch", json={
+        "texts": ["hola"], "backend": "gpt-embed-9000",
+    })
+    assert r.status_code == 422
+
+
+def test_embed_batch_matches_sequential_embed(app_and_state):
+    """Contract parity: /embed_batch returns exactly what N sequential
+    /embed calls would — same vectors, same encoder_id, same order.
+    This is the invariant the embedding-sink's 404 fallback relies on:
+    falling back to sequential /embed must be behaviour-preserving."""
+    app, _stub, *_ = app_and_state
+    client = TestClient(app)
+    texts = ["hola mundo", "hello world", "bonjour"]
+
+    sequential = [
+        client.post(
+            "/embed", json={"text": t, "backend": "mistral-embed"},
+        ).json()
+        for t in texts
+    ]
+
+    # Wipe the cache so the batch path exercises the backend, not the
+    # rows the sequential calls just wrote.
+    app.state.cache.embeddings.clear()
+
+    r = client.post("/embed_batch", json={
+        "texts": texts, "backend": "mistral-embed",
+    })
+    assert r.status_code == 200, r.text
+    batch = r.json()["results"]
+
+    assert len(batch) == len(sequential)
+    for got, want in zip(batch, sequential):
+        assert got["vector"] == want["vector"]
+        assert got["dim"] == want["dim"]
+        assert got["encoder_id"] == want["encoder_id"]
+        assert got["backend"] == want["backend"]
