@@ -36,9 +36,24 @@ jobs:
           PIP_TRUSTED_HOST: nexus.void42.internal
         run: |
           pip install --no-cache-dir -r requirements.txt pytest pytest-cov cyclonedx-bom
-          python3 -m pytest tests/unit tests/component -q --cov=src --cov-report=xml:coverage.xml --cov-config=.coveragerc || true
-      - name: SonarQube scan
-        run: npx sonarqube-scanner -Dsonar.host.url=http://sonarqube.sonarqube.svc.cluster.local:9000 -Dsonar.token=${{ secrets.SONAR_TOKEN }}
+          # No `|| true`: a failing suite used to still publish a
+          # coverage report and pass the job, so broken tests reached
+          # main looking green.
+          python3 -m pytest tests/unit tests/component -q --cov=src --cov-report=xml:coverage.xml --cov-config=.coveragerc
+      # Was an inline `npx sonarqube-scanner` with no
+      # -Dsonar.qualitygate.wait, so it uploaded the report and never
+      # looked at the verdict: gmr-linguistics has been sitting on
+      # ERROR (new_coverage 73.1, duplication 9.7%, 4 new violations)
+      # with a green pipeline. The shared action waits for the gate,
+      # exits non-zero on ERROR, and prints which condition failed.
+      - uses: actions/checkout@v4
+        with:
+          repository: void42/ci-actions
+          path: .ci-actions
+          token: ${{ secrets.CI_READ_TOKEN }}
+      - uses: ./.ci-actions/actions/sonar-scan
+        with:
+          sonar-token: ${{ secrets.SONAR_TOKEN }}
       - name: Generate SBOM
         run: cyclonedx-py requirements requirements.txt --of json -o sbom.json
       - name: Upload SBOM to Dependency-Track
