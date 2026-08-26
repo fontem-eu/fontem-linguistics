@@ -21,6 +21,14 @@ from src.infra.metrics import EMBEDDING_LATENCY, EMBEDDINGS_TOTAL
 from src.infra.spend_cap import SpendCap
 
 
+# The same "<backend> backend not configured" sentence was written out at
+# eight call sites across three backends. One helper keeps them from
+# drifting apart, and means the wording changes in one place.
+def _not_configured(label: str) -> BackendUnavailable:
+    """Raised when a backend is selected but was never wired up at startup."""
+    return BackendUnavailable(f"{label} backend not configured")
+
+
 @dataclass
 class EmbeddingService:
     cache: PostgresCache
@@ -101,11 +109,11 @@ class EmbeddingService:
     ) -> list[list[float]]:
         if backend is EmbeddingBackend.LABSE_LOCAL:
             if self.labse is None:
-                raise BackendUnavailable("labse-local backend not configured")
+                raise _not_configured("labse-local")
             return await self.labse.embed_batch(texts)
         if backend is EmbeddingBackend.MINILM_LOCAL:
             if self.minilm is None:
-                raise BackendUnavailable("minilm-local backend not configured")
+                raise _not_configured("minilm-local")
             return await self.minilm.embed_batch(texts)
         # Mistral: no server-side batch; loop with per-text /embed. Still
         # saves the HTTP overhead on the linguistics ↔ client hop.
@@ -122,15 +130,15 @@ class EmbeddingService:
         """
         if backend is EmbeddingBackend.MISTRAL_EMBED:
             if self.mistral is None:
-                raise BackendUnavailable("mistral backend not configured")
+                raise _not_configured("mistral")
             return self.mistral.embed_encoder_id
         if backend is EmbeddingBackend.LABSE_LOCAL:
             if self.labse is None:
-                raise BackendUnavailable("labse-local backend not configured")
+                raise _not_configured("labse-local")
             return self.labse.encoder_id
         if backend is EmbeddingBackend.MINILM_LOCAL:
             if self.minilm is None:
-                raise BackendUnavailable("minilm-local backend not configured")
+                raise _not_configured("minilm-local")
             return self.minilm.encoder_id
         raise BackendUnavailable(f"unknown embedding backend: {backend!r}")
 
@@ -145,7 +153,7 @@ class EmbeddingService:
 
     async def _call_mistral(self, text: str) -> list[float]:
         if self.mistral is None:
-            raise BackendUnavailable("mistral backend not configured")
+            raise _not_configured("mistral")
         if not await self.mistral_breaker.allow():
             raise CircuitOpen("mistral circuit breaker is open")
 
@@ -164,10 +172,10 @@ class EmbeddingService:
 
     async def _call_labse(self, text: str) -> list[float]:
         if self.labse is None:
-            raise BackendUnavailable("labse-local backend not configured")
+            raise _not_configured("labse-local")
         return await self.labse.embed(text)
 
     async def _call_minilm(self, text: str) -> list[float]:
         if self.minilm is None:
-            raise BackendUnavailable("minilm-local backend not configured")
+            raise _not_configured("minilm-local")
         return await self.minilm.embed(text)

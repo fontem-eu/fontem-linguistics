@@ -237,9 +237,14 @@ async def metrics() -> Response:
 
 @router.post(
     "/embed_batch",
-    response_model=EmbedBatchResponse,
+    # No response_model= — the return annotation below already declares it,
+    # and FastAPI derives the schema from that.
     responses={
         400: {"description": "Invalid input."},
+        # This route raises 429 on SpendCapExceeded exactly like /translate
+        # and /embed do, but did not advertise it, so a client generated
+        # from the OpenAPI schema had no branch for a spend-cap rejection.
+        429: {"description": "Daily spend cap exceeded for the Mistral backend."},
         503: {"description": "Configured backend unavailable / circuit open."},
     },
 )
