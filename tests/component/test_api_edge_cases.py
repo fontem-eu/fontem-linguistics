@@ -178,3 +178,58 @@ def test_idempotency_store_evicts_oldest_over_cap(monkeypatch):
     # oldest evicted
     assert "key-a" not in _IDEMPOTENCY_STORE
     assert "key-d" in _IDEMPOTENCY_STORE
+
+
+# ── /embed_batch error branches ───────────────────────────────────
+# /embed had these; /embed_batch did not, so every one of its except
+# clauses was unexercised. The X-Backend-State header is how a caller
+# tells "retry shortly" (circuit-open) from "stop until tomorrow"
+# (spend-cap) from "this deployment is misconfigured" (unavailable) —
+# getting one wrong sends a client into the wrong recovery behaviour.
+
+def test_embed_batch_spend_cap_429():
+    """Also pins the 429 that /embed_batch now declares in its OpenAPI
+    responses; before that a generated client had no branch for it."""
+    app, _ = _build_app(cap=SpendCap(daily_cap_usd=0.0))
+    r = TestClient(app).post("/embed_batch", json={
+        "texts": ["hi"], "backend": "mistral-embed",
+    })
+    assert r.status_code == 429
+    assert r.headers.get("X-Backend-State") == "spend-cap-exceeded"
+
+
+def test_embed_batch_circuit_open_503():
+    breaker = CircuitBreaker(failure_threshold=0.0, min_requests=1)
+    asyncio.run(breaker.record_failure())
+    app, _ = _build_app(breaker=breaker)
+    r = TestClient(app).post("/embed_batch", json={
+        "texts": ["hi"], "backend": "mistral-embed",
+    })
+    assert r.status_code == 503
+    assert r.headers.get("X-Backend-State") == "circuit-open"
+
+
+def test_embed_batch_unconfigured_backend_503():
+    """labse/minilm are None in this harness — the same shape as a pod
+    deployed without the local model mirror."""
+    app, _ = _build_app()
+    r = TestClient(app).post("/embed_batch", json={
+        "texts": ["hi"], "backend": "labse-local",
+    })
+    assert r.status_code == 503
+    assert r.headers.get("X-Backend-State") == "unavailable"
+    assert "labse-local backend not configured" in r.json()["detail"]
+
+
+def test_embed_batch_rejects_an_empty_or_oversized_batch():
+    """texts is Field(min_length=1, max_length=256), so both ends are a 422
+    from validation rather than reaching the service. Pinned because the
+    bounds are a deliberate contract: an empty call is a caller bug, and
+    256 is what keeps one request from monopolising the CPU pool."""
+    client = TestClient(_build_app()[0])
+    empty = client.post("/embed_batch", json={
+        "texts": [], "backend": "mistral-embed"})
+    assert empty.status_code == 422
+    oversized = client.post("/embed_batch", json={
+        "texts": ["x"] * 257, "backend": "mistral-embed"})
+    assert oversized.status_code == 422
