@@ -85,7 +85,7 @@ jobs:
           COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
         run: |
           echo "$COSIGN_KEY" > /tmp/cosign.key
-          cosign sign --key /tmp/cosign.key --yes --allow-http-registry \
+          cosign sign --tlog-upload=false --key /tmp/cosign.key --yes --allow-http-registry \
             "${{ steps.push.outputs.ref_by_digest }}"
           rm /tmp/cosign.key
 
@@ -95,7 +95,7 @@ jobs:
           COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
         run: |
           echo "$COSIGN_KEY" > /tmp/cosign.key
-          cosign attest --key /tmp/cosign.key --yes --allow-http-registry \
+          cosign attest --tlog-upload=false --key /tmp/cosign.key --yes --allow-http-registry \
             --type cyclonedx \
             --predicate /tmp/labse-mirror/sbom.cdx.json \
             "${{ steps.push.outputs.ref_by_digest }}"
