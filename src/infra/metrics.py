@@ -35,6 +35,17 @@ MISTRAL_SPEND_USD = Counter(
     ["endpoint"],
 )
 
+# Provider-labelled successor to MISTRAL_SPEND_USD. A second paid provider
+# (Nebius) made a metric named for one of them wrong, and renaming the old
+# one would break the dashboards that already query it — so Mistral keeps
+# reporting to both and new providers report only here.
+LLM_SPEND_USD = Counter(
+    "llm_spend_usd_total",
+    "Cumulative hosted-LLM spend (USD) by provider. Per pod lifetime; "
+    "SpendCap holds the daily budget.",
+    ["provider", "endpoint"],
+)
+
 BREAKER_STATE = Gauge(
     "mistral_circuit_breaker_state",
     "Circuit breaker state for the Mistral backend (0=closed, 1=half-open, 2=open).",

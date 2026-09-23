@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from loguru import logger
 
 from src.backends.mistral import MistralBackend, MistralError, MistralTransientError
+from src.backends.nebius import NebiusBackend, NebiusError, NebiusTransientError
 from src.backends.nllb_local import NllbLocalBackend
 from src.cache.postgres import PostgresCache
 from src.domain.models import (
@@ -20,13 +21,21 @@ from src.infra.metrics import TRANSLATION_LATENCY, TRANSLATIONS_TOTAL
 from src.infra.spend_cap import SpendCap
 
 
+# The composition point for every translation path: one cache, and per
+# provider a backend, a breaker and a budget. Splitting them into
+# per-provider structs would hide that they are wired identically.
 @dataclass
-class TranslationService:
+class TranslationService:  # pylint: disable=too-many-instance-attributes
     cache: PostgresCache
     mistral: MistralBackend | None
     nllb: NllbLocalBackend | None
     mistral_breaker: CircuitBreaker
     mistral_spend_cap: SpendCap
+    # Nebius arrives with its own breaker and cap: one provider degrading
+    # must not trip the other, and the budgets are not shared.
+    nebius: NebiusBackend | None = None
+    nebius_breaker: CircuitBreaker | None = None
+    nebius_spend_cap: SpendCap | None = None
 
     async def translate(
         self,
@@ -58,7 +67,7 @@ class TranslationService:
                 cached_targets=frozenset(cached.keys()),
             )
 
-        fresh = await self._call_backend(text, source_lang, missing, backend)
+        fresh, cost_usd = await self._call_backend(text, source_lang, missing, backend)
         await self.cache.put_translations(text, source_lang, backend_str, fresh)
 
         merged = {**cached, **fresh}
@@ -75,6 +84,7 @@ class TranslationService:
             translations=merged,
             backend=backend,
             cached_targets=frozenset(cached.keys()),
+            cost_usd=cost_usd,
         )
 
     async def _call_backend(
@@ -83,10 +93,14 @@ class TranslationService:
         source_lang: str,
         missing: list[str],
         backend: TranslationBackend,
-    ) -> dict[str, str]:
+    ) -> tuple[dict[str, str], float]:
+        """``(translations, what it cost)``. Cost is zero where nothing was
+        billed — the local backends, and any path that only read cache."""
         if backend is TranslationBackend.MISTRAL:
-            return await self._call_mistral(text, source_lang, missing)
-        return await self._call_nllb(text, source_lang, missing)
+            return await self._call_mistral(text, source_lang, missing), 0.0
+        if backend is TranslationBackend.NEBIUS:
+            return await self._call_nebius(text, source_lang, missing)
+        return await self._call_nllb(text, source_lang, missing), 0.0
 
     async def _call_mistral(
         self, text: str, source_lang: str, missing: list[str]
@@ -108,6 +122,34 @@ class TranslationService:
             raise
         await self.mistral_breaker.record_success()
         return result
+
+    async def _call_nebius(
+        self, text: str, source_lang: str, missing: list[str]
+    ) -> tuple[dict[str, str], float]:
+        """Same shape as Mistral: breaker, reserve, call, settle.
+
+        The reservation is an estimate; `finalize` replaces it with what the
+        provider's usage block actually charged, so a title that translates
+        longer than guessed cannot walk past the cap unnoticed.
+        """
+        if self.nebius is None or self.nebius_breaker is None or self.nebius_spend_cap is None:
+            raise BackendUnavailable("nebius backend not configured")
+        if not await self.nebius_breaker.allow():
+            raise CircuitOpen("nebius circuit breaker is open")
+
+        estimate = self.nebius.estimate_chat_usd(len(text), len(missing))
+        await self.nebius_spend_cap.reserve(estimate)
+
+        try:
+            result, actual = await self.nebius.translate_with_cost(text, source_lang, missing)
+        except (NebiusTransientError, NebiusError) as exc:
+            await self.nebius_breaker.record_failure()
+            await self.nebius_spend_cap.release(estimate)
+            logger.warning("nebius translate failure: {}", exc)
+            raise
+        await self.nebius_spend_cap.finalize(estimate, actual)
+        await self.nebius_breaker.record_success()
+        return result, actual
 
     async def _call_nllb(
         self, text: str, source_lang: str, missing: list[str]

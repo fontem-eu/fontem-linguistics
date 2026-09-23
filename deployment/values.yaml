@@ -12,6 +12,16 @@ mistralChatModel: "mistral-medium-latest"
 # versioned id, update here, plan a re-embed pass because encoder_id
 # changes → old vectors are no longer comparable to new ones.
 mistralEmbedModel: "mistral-embed-2312"
+
+# Nebius AI Studio — bulk translation. The key is synced from Vault into this
+# secret by a VaultStaticSecret in gitops (infra/linguistics-service.yaml).
+nebiusSecretName: "fontem-linguistics-nebius-credentials"
+nebiusApiUrl: "https://api.studio.nebius.com/v1"
+# Measured 2026-09-23: 23/23 languages on a real contract title, 12.2s,
+# 138 + 830 tokens. Qwen3-30B-A3B timed out at 180s on the same request.
+nebiusChatModel: "google/gemma-3-27b-it"
+# Separate from Mistral's cap. Per pod: replicas x cap is the real ceiling.
+nebiusSpendCapUsdDaily: "10.0"
 spendCapUsdDaily: "50.0"
 breakerFailureThreshold: "0.05"
 breakerWindowS: "60"

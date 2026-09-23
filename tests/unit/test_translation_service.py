@@ -11,6 +11,7 @@ from src.domain.models import (
     SpendCapExceeded,
     TranslationBackend,
 )
+from src.backends.nebius import NebiusTransientError
 from src.infra.circuit_breaker import CircuitBreaker
 from src.infra.spend_cap import SpendCap
 from src.services.translation import TranslationService
@@ -223,3 +224,113 @@ async def test_nllb_path_happy():
     svc = _mk(nllb=_FakeNllb())
     result = await svc.translate("hi", "en", ["fr"], TranslationBackend.NLLB_LOCAL)
     assert result.translations == {"fr": "[fr]hi"}
+
+
+# ── Nebius routing ────────────────────────────────────────────────
+
+
+@dataclass
+class FakeNebius:
+    """Reports a cost that differs from the estimate, like the real one."""
+
+    cost_usd: float = 0.00035
+    raises: Exception | None = None
+    call_count: int = 0
+
+    def estimate_chat_usd(self, text_chars, n_targets):
+        return 0.0001
+
+    async def translate_with_cost(self, text, source_lang, targets):
+        self.call_count += 1
+        if self.raises:
+            raise self.raises
+        return {t: f"{t}:{text}" for t in targets}, self.cost_usd
+
+    async def translate(self, text, source_lang, targets):
+        got, _cost = await self.translate_with_cost(text, source_lang, targets)
+        return got
+
+
+def _mk_nebius(nebius, cap_usd: float = 10.0, cache=None) -> TranslationService:
+    return TranslationService(
+        cache=cache or FakeCache(),
+        mistral=None,
+        nllb=None,
+        mistral_breaker=CircuitBreaker(),
+        mistral_spend_cap=SpendCap(daily_cap_usd=10.0),
+        nebius=nebius,
+        nebius_breaker=CircuitBreaker(),
+        nebius_spend_cap=SpendCap(daily_cap_usd=cap_usd),
+    )
+
+
+async def test_nebius_backend_is_routed_to_and_cached():
+    nebius = FakeNebius()
+    svc = _mk_nebius(nebius)
+    result = await svc.translate("Roboty", "pl", ["mt", "ga"], TranslationBackend.NEBIUS)
+    assert result.translations == {"mt": "mt:Roboty", "ga": "ga:Roboty"}
+    assert nebius.call_count == 1
+    # Cached under its own backend key: a Nebius translation must not be
+    # served as a Mistral one, or vice versa.
+    again = await svc.translate("Roboty", "pl", ["mt", "ga"], TranslationBackend.NEBIUS)
+    assert nebius.call_count == 1 and not again.cached_targets ^ {"mt", "ga"}
+
+
+async def test_the_cap_settles_on_the_real_cost_not_the_estimate():
+    """The estimate under-reserves — measured 0.00035 actual against a
+    0.0001 guess. Without finalize a budget drifts by that ratio and a
+    "EUR 5 run" is not one."""
+    nebius = FakeNebius(cost_usd=0.00035)
+    svc = _mk_nebius(nebius)
+    await svc.translate("Roboty", "pl", ["mt"], TranslationBackend.NEBIUS)
+    assert svc.nebius_spend_cap.spent_usd == pytest.approx(0.00035)
+
+
+async def test_a_full_cap_refuses_before_spending_more():
+    nebius = FakeNebius(cost_usd=0.5)
+    svc = _mk_nebius(nebius, cap_usd=0.4)
+    await svc.translate("a", "pl", ["mt"], TranslationBackend.NEBIUS)
+    with pytest.raises(SpendCapExceeded):
+        await svc.translate("b", "pl", ["mt"], TranslationBackend.NEBIUS)
+    assert nebius.call_count == 1
+
+
+async def test_a_failed_call_releases_its_reservation():
+    nebius = FakeNebius(raises=NebiusTransientError("503"))
+    svc = _mk_nebius(nebius)
+    with pytest.raises(NebiusTransientError):
+        await svc.translate("Roboty", "pl", ["mt"], TranslationBackend.NEBIUS)
+    assert svc.nebius_spend_cap.spent_usd == 0.0
+
+
+async def test_nebius_unconfigured_is_a_clear_refusal():
+    svc = _mk_nebius(None)
+    with pytest.raises(BackendUnavailable, match="nebius"):
+        await svc.translate("Roboty", "pl", ["mt"], TranslationBackend.NEBIUS)
+
+
+async def test_the_result_reports_what_the_call_cost():
+    """A caller working to a budget accumulates this rather than estimating
+    from its own token arithmetic — which is what makes a "EUR 5 run" a
+    measurement instead of a hope."""
+    svc = _mk_nebius(FakeNebius(cost_usd=0.00035))
+    result = await svc.translate("Roboty", "pl", ["mt"], TranslationBackend.NEBIUS)
+    assert result.cost_usd == pytest.approx(0.00035)
+
+
+async def test_a_cache_hit_costs_nothing():
+    cache = FakeCache()
+    cache.translations[("Roboty", "pl", "mt", "nebius")] = "Xogħol"
+    nebius = FakeNebius()
+    svc = _mk_nebius(nebius, cache=cache)
+    result = await svc.translate("Roboty", "pl", ["mt"], TranslationBackend.NEBIUS)
+    assert result.cost_usd == 0.0 and nebius.call_count == 0
+
+
+async def test_the_local_backend_is_free():
+    svc = TranslationService(
+        cache=FakeCache(), mistral=None, nllb=FakeMistral(),
+        mistral_breaker=CircuitBreaker(), mistral_spend_cap=SpendCap(daily_cap_usd=1.0),
+    )
+    result = await svc.translate("Roboty", "pl", ["mt"], TranslationBackend.NLLB_LOCAL)
+    assert result.cost_usd == 0.0

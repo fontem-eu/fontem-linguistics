@@ -11,6 +11,7 @@ from src.api.deps import Services
 from src.api.routes import router as api_router, _IDEMPOTENCY_STORE
 from src.backends.mistral import MistralBackend
 from src.infra.circuit_breaker import CircuitBreaker
+from src.infra.config import Settings
 from src.infra.spend_cap import SpendCap
 from src.services.embedding import EmbeddingService
 from src.services.translation import TranslationService
@@ -88,6 +89,9 @@ def app_and_state():
     app = FastAPI()
     app.include_router(api_router)
     app.state.services = Services(translation=translation, embedding=embedding)
+    # The real app always carries its settings; the batch route reads its
+    # concurrency window from them.
+    app.state.settings = Settings(database_url="postgresql://unused")
     app.state.cache = cache
     return app, stub_state, breaker, cap
 
@@ -376,3 +380,72 @@ def test_embed_batch_matches_sequential_embed(app_and_state):
         assert got["dim"] == want["dim"]
         assert got["encoder_id"] == want["encoder_id"]
         assert got["backend"] == want["backend"]
+
+
+def test_batch_item_failures_do_not_sink_the_batch(app_and_state):
+    """The budget running out partway through a batch used to escape
+    `gather` and 500 the whole request — throwing away the translations,
+    and the reported cost, of every item that had already succeeded. Now the
+    items that ran keep their results and each failure says why."""
+    app, _stub, _breaker, cap = app_and_state
+    client = TestClient(app)
+    first = client.post("/translate/batch", json={
+        "items": [{"text": "hello", "source_lang": "en"}],
+        "targets": ["fr"], "backend": "mistral",
+    })
+    assert first.status_code == 200
+
+    cap.daily_cap_usd = 0.0          # nothing more may be spent
+    r = client.post("/translate/batch", json={
+        "items": [
+            {"text": "hello", "source_lang": "en"},      # cached: costs nothing
+            {"text": "never seen", "source_lang": "en"},  # needs spend: refused
+        ],
+        "targets": ["fr"], "backend": "mistral",
+    })
+    assert r.status_code == 200
+    cached, refused = r.json()["results"]
+    assert cached["translations"] == first.json()["results"][0]["translations"]
+    assert cached["error"] is None
+    assert refused["translations"] == {}
+    assert refused["error"].startswith("SpendCapExceeded")
+
+
+def test_batch_reports_cost_per_item(app_and_state):
+    app, *_ = app_and_state
+    r = TestClient(app).post("/translate/batch", json={
+        "items": [{"text": "hello", "source_lang": "en"}],
+        "targets": ["fr"], "backend": "mistral",
+    })
+    item = r.json()["results"][0]
+    assert "cost_usd" in item and item["cost_usd"] >= 0.0
+    assert item["error"] is None
+
+
+def test_batch_runs_inside_a_bounded_window(app_and_state):
+    """256 items must not become 256 simultaneous provider calls."""
+    import asyncio
+
+    app, *_ = app_and_state
+    app.state.settings = Settings(database_url="postgresql://unused", batch_max_concurrency=2)
+    svc = app.state.services.translation
+    live = {"now": 0, "peak": 0}
+    original = svc.translate
+
+    async def counting(**kwargs):
+        live["now"] += 1
+        live["peak"] = max(live["peak"], live["now"])
+        await asyncio.sleep(0.01)
+        try:
+            return await original(**kwargs)
+        finally:
+            live["now"] -= 1
+
+    svc.translate = counting
+    r = TestClient(app).post("/translate/batch", json={
+        "items": [{"text": f"t{i}", "source_lang": "en"} for i in range(10)],
+        "targets": ["fr"], "backend": "mistral",
+    })
+    assert r.status_code == 200
+    assert len(r.json()["results"]) == 10
+    assert live["peak"] <= 2

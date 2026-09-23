@@ -39,6 +39,13 @@ class SpendCap:
                 )
             self._spent_usd += estimated_usd
 
+    @property
+    def spent_usd(self) -> float:
+        """What has been charged today. Read-only, and read without the lock:
+        a caller deciding whether to keep going wants the current figure, not
+        a serialised one."""
+        return self._spent_usd
+
     async def finalize(self, estimated_usd: float, actual_usd: float) -> None:
         """Correct the reservation to match the actual billed amount."""
         delta = actual_usd - estimated_usd
