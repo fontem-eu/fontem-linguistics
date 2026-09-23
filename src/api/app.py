@@ -22,7 +22,6 @@ from src.services.embedding import EmbeddingService
 from src.services.translation import TranslationService
 
 
-@asynccontextmanager
 def _build_hosted_backends(
     settings: Settings,
 ) -> tuple[MistralBackend | None, NebiusBackend | None]:
@@ -63,6 +62,7 @@ def _build_hosted_backends(
 # Startup sequence: six backends, two breakers, two budgets and two
 # services, in dependency order. The count is the point — splitting it
 # further only moves the locals into a helper with seven parameters.
+@asynccontextmanager
 async def lifespan(  # pylint: disable=too-many-locals
     application: FastAPI,
 ) -> AsyncGenerator[None, None]:
@@ -142,8 +142,9 @@ async def lifespan(  # pylint: disable=too-many-locals
     try:
         yield
     finally:
-        if mistral is not None:
-            await mistral.aclose()
+        for provider in (mistral, nebius):
+            if provider is not None:
+                await provider.aclose()
         await cache.close()
 
 
