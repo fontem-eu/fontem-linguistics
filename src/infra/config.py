@@ -26,6 +26,36 @@ class Settings(BaseSettings):
     mistral_timeout_s: float = Field(default=30.0)
     mistral_max_retries: int = Field(default=3)
 
+    # Nebius AI Studio backend — OpenAI-compatible, translation only.
+    # Embeddings deliberately stay on LaBSE: a second embedding provider
+    # would produce vectors in a space the consolidator may not compare.
+    nebius_api_url: str = Field(default="https://api.studio.nebius.com/v1")
+    nebius_api_key: str | None = Field(default=None)
+    nebius_chat_model: str = Field(
+        default="google/gemma-3-27b-it",
+        description=(
+            "Measured 2026-09-23 on a real contract title into 23 languages: "
+            "138 prompt + 830 completion tokens, 12.2s, all 23 present and "
+            "correct in Maltese, Irish, Latvian and Estonian. "
+            "Qwen3-30B-A3B timed out at 180s on the same request."
+        ),
+    )
+    nebius_timeout_s: float = Field(default=120.0)
+    nebius_max_retries: int = Field(default=3)
+
+    # Nebius does not publish prices over the API, so they are configuration.
+    # Spend is charged from the usage block the provider returns, so a wrong
+    # price here skews the accounting but cannot silently uncap it.
+    nebius_price_input_per_mtok: float = Field(default=0.13)
+    nebius_price_output_per_mtok: float = Field(default=0.40)
+    nebius_spend_cap_usd_daily: float = Field(
+        default=10.0,
+        description=(
+            "Nebius's own daily ceiling, separate from Mistral's. Per pod: "
+            "N replicas x cap is the real ceiling, so size it accordingly."
+        ),
+    )
+
     # Stability
     breaker_failure_threshold: float = Field(
         default=0.05, description="Open above this ratio in window."

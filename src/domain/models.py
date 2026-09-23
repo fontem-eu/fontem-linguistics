@@ -7,6 +7,7 @@ from enum import Enum
 
 class TranslationBackend(str, Enum):
     MISTRAL = "mistral"
+    NEBIUS = "nebius"
     NLLB_LOCAL = "nllb-local"
 
 
