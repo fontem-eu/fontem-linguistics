@@ -35,14 +35,35 @@ def lang_fullname(code: str) -> str:
     return LANG_FULLNAMES.get(code, code)
 
 
+#: BCP-47 "undetermined". A caller that cannot tell the source language
+#: passes this rather than a guess: telling a model a Norwegian title is
+#: English is worse than asking it to look.
+UNDETERMINED = "und"
+
+
 def build_translate_prompt(text: str, source_lang: str, targets: list[str]) -> str:
-    """One prompt, one JSON object back, keyed by language code."""
-    src = lang_fullname(source_lang)
+    """One prompt, one JSON object back, keyed by language code.
+
+    With ``source_lang="und"`` the model is asked to identify the language
+    itself, and any target that turns out to BE the source comes back as the
+    original text — so the caller can ask for every language without first
+    knowing which one it already has.
+    """
     keys = ", ".join(f'"{t}"' for t in targets)
     pretty = ", ".join(f"{code} ({lang_fullname(code)})" for code in targets)
+    if source_lang == UNDETERMINED:
+        opening = (
+            "Identify the language of the following text and translate it into "
+            "the target languages; for a target that is the text's own "
+            "language, return the text unchanged. Preserve institutional "
+        )
+    else:
+        opening = (
+            "Translate the following text from "
+            f"{lang_fullname(source_lang)} into the target languages. Preserve institutional "
+        )
     return (
-        "Translate the following text from "
-        f"{src} into the target languages. Preserve institutional "
+        opening +
         "terminology, do not paraphrase. Return strict JSON with keys: "
         f"{keys}. No prose, no explanation.\n"
         f"Target languages: {pretty}.\n"

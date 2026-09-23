@@ -34,6 +34,18 @@ from src.domain.models import (
     SpendCapExceeded,
 )
 
+#: What one batch item may fail with and still let the rest of the batch
+#: finish. Anything outside this set is a bug and should surface as one.
+_BATCH_ITEM_FAILURES = (
+    CircuitOpen,
+    BackendUnavailable,
+    SpendCapExceeded,
+    MistralError,
+    MistralTransientError,
+    NebiusError,
+    NebiusTransientError,
+)
+
 router = APIRouter()
 
 
@@ -108,30 +120,35 @@ async def translate_batch(
         return _IDEMPOTENCY_STORE[idempotency_key]
 
     svc = _services(request).translation
+    window = asyncio.Semaphore(request.app.state.settings.batch_max_concurrency)
 
     async def _one(item) -> TranslateResponse:
-        try:
-            result = await svc.translate(
-                text=item.text,
-                source_lang=item.source_lang,
-                targets=req.targets,
-                backend=req.backend,
-            )
+        """One item, inside the concurrency window, never raising.
+
+        Any failure becomes this item's `error` rather than the batch's: one
+        bad title, or the budget running out partway, must not throw away the
+        translations — and the reported cost — of the items that succeeded.
+        """
+        async with window:
+            try:
+                result = await svc.translate(
+                    text=item.text,
+                    source_lang=item.source_lang,
+                    targets=req.targets,
+                    backend=req.backend,
+                )
+            except _BATCH_ITEM_FAILURES as exc:
+                logger.warning("batch item failed backend={} error={}", req.backend, exc)
+                return TranslateResponse(
+                    cached=False, backend=req.backend, translations={},
+                    partial_cached_targets=[], error=f"{type(exc).__name__}: {exc}",
+                )
             return TranslateResponse(
                 cached=result.fully_cached,
                 backend=result.backend,
                 translations=result.translations,
                 partial_cached_targets=sorted(result.cached_targets),
                 cost_usd=result.cost_usd,
-            )
-        except CircuitOpen:
-            # Surface per-item: batch partial completion is acceptable. Return
-            # an empty translations dict and let the caller retry the failed
-            # items. Simpler than aborting the whole batch.
-            logger.warning("batch item circuit-open for backend={}", req.backend)
-            return TranslateResponse(
-                cached=False, backend=req.backend, translations={},
-                partial_cached_targets=[],
             )
 
     results = await asyncio.gather(*[_one(it) for it in req.items])

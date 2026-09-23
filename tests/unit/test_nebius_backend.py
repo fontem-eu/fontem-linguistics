@@ -131,3 +131,19 @@ async def test_malformed_json_is_rejected():
 
     with pytest.raises(NebiusError, match="malformed"):
         await _build(handler).translate("t", "pl", TARGETS)
+
+
+async def test_an_undetermined_source_asks_the_model_to_look():
+    """A Norwegian title labelled English is worse than no label: the model
+    is told what to translate from, and the English target is never asked
+    for because the runner thinks it already has it."""
+    seen = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen["prompt"] = json.loads(request.content)["messages"][0]["content"]
+        return _completion({"en": "Wind turbine procurement", "mt": "x"})
+
+    await _build(handler).translate("Anskaffelse av vindturbiner", "und", ["en", "mt"])
+    assert "Identify the language" in seen["prompt"]
+    assert "return the text unchanged" in seen["prompt"]
+    assert "from und" not in seen["prompt"]

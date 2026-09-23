@@ -56,6 +56,11 @@ class Settings(BaseSettings):
         ),
     )
 
+    # One /translate/batch request may carry 256 items. Firing all of them at
+    # a hosted provider at once invites 429s and turns a batch into a retry
+    # storm, so items run through a bounded window.
+    batch_max_concurrency: int = Field(default=8, ge=1, le=64)
+
     # Stability
     breaker_failure_threshold: float = Field(
         default=0.05, description="Open above this ratio in window."

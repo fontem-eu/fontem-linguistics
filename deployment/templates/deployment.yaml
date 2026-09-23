@@ -112,6 +112,22 @@ spec:
                 secretKeyRef:
                   name: fontem-linguistics-mistral-credentials
                   key: api-key
+            # Nebius: translation only. `optional` so the service starts and
+            # keeps serving Mistral, NLLB and LaBSE before the secret exists —
+            # without a key the Nebius backend is simply not built, and asking
+            # for it returns a clear "not configured" rather than a crash loop.
+            - name: NEBIUS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.nebiusSecretName | quote }}
+                  key: NEBIUS_API_KEY
+                  optional: true
+            - name: NEBIUS_API_URL
+              value: {{ .Values.nebiusApiUrl | quote }}
+            - name: NEBIUS_CHAT_MODEL
+              value: {{ .Values.nebiusChatModel | quote }}
+            - name: NEBIUS_SPEND_CAP_USD_DAILY
+              value: {{ .Values.nebiusSpendCapUsdDaily | quote }}
             # HuggingFace Hub token — lifts the anonymous rate limit
             # for NLLB + LaBSE model downloads on first use of the
             # nllb-local / labse-local backends. Without this, a cold

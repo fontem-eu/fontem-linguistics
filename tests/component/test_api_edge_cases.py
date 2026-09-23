@@ -13,6 +13,7 @@ from src.api.deps import Services
 from src.api.routes import router as api_router, _IDEMPOTENCY_STORE
 from src.backends.mistral import MistralBackend
 from src.infra.circuit_breaker import CircuitBreaker
+from src.infra.config import Settings
 from src.infra.spend_cap import SpendCap
 from src.services.embedding import EmbeddingService
 from src.services.translation import TranslationService
@@ -95,6 +96,9 @@ def _build_app(breaker=None, cap=None, pool_ok: bool = True):
     app = FastAPI()
     app.include_router(api_router)
     app.state.services = Services(translation=translation, embedding=embedding)
+    # The real app always carries its settings; the batch route reads its
+    # concurrency window from them.
+    app.state.settings = Settings(database_url="postgresql://unused")
     app.state.cache = cache
     return app, stub_state
 

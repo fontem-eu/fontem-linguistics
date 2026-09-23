@@ -22,6 +22,11 @@ class TranslateResponse(BaseModel):
     #: and on the local backends. A caller running to a budget accumulates
     #: this rather than estimating from its own token arithmetic.
     cost_usd: float = 0.0
+    #: Why this item came back without translations, when it did. A batch
+    #: completes even if some items fail, so the caller needs to tell a spent
+    #: budget from a provider hiccup from an open breaker — they call for
+    #: different responses.
+    error: str | None = None
 
 
 class BatchTranslateItem(BaseModel):
