@@ -27,6 +27,7 @@ from src.api.schemas import (
 from src.domain.catalog import CATALOG
 from src.domain.languages import EU_OFFICIAL_LANGS, LANG_DISPLAY_NAMES
 from src.backends.mistral import MistralError, MistralTransientError
+from src.backends.nebius import NebiusError, NebiusTransientError
 from src.domain.models import (
     BackendUnavailable,
     CircuitOpen,
@@ -76,12 +77,17 @@ async def translate(req: TranslateRequest, request: Request) -> TranslateRespons
         raise HTTPException(status_code=502, detail=f"mistral transient failure: {exc}") from exc
     except MistralError as exc:
         raise HTTPException(status_code=502, detail=f"mistral error: {exc}") from exc
+    except NebiusTransientError as exc:
+        raise HTTPException(status_code=502, detail=f"nebius transient failure: {exc}") from exc
+    except NebiusError as exc:
+        raise HTTPException(status_code=502, detail=f"nebius error: {exc}") from exc
 
     return TranslateResponse(
         cached=result.fully_cached,
         backend=result.backend,
         translations=result.translations,
         partial_cached_targets=sorted(result.cached_targets),
+        cost_usd=result.cost_usd,
     )
 
 
@@ -116,6 +122,7 @@ async def translate_batch(
                 backend=result.backend,
                 translations=result.translations,
                 partial_cached_targets=sorted(result.cached_targets),
+                cost_usd=result.cost_usd,
             )
         except CircuitOpen:
             # Surface per-item: batch partial completion is acceptable. Return
@@ -168,6 +175,10 @@ async def embed(req: EmbedRequest, request: Request) -> EmbedResponse:
         raise HTTPException(status_code=502, detail=f"mistral transient failure: {exc}") from exc
     except MistralError as exc:
         raise HTTPException(status_code=502, detail=f"mistral error: {exc}") from exc
+    except NebiusTransientError as exc:
+        raise HTTPException(status_code=502, detail=f"nebius transient failure: {exc}") from exc
+    except NebiusError as exc:
+        raise HTTPException(status_code=502, detail=f"nebius error: {exc}") from exc
 
     return EmbedResponse(
         cached=result.cached, backend=result.backend, dim=result.dim,

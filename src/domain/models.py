@@ -30,6 +30,10 @@ class TranslationResult:
     translations: dict[str, str]   # target_lang -> translation
     backend: TranslationBackend
     cached_targets: frozenset[str]
+    #: What the provider charged for this call, as it reported it. Zero for
+    #: a cache hit and for the local backends. A bulk caller working to a
+    #: budget needs the real figure, not its own estimate of one.
+    cost_usd: float = 0.0
 
     @property
     def fully_cached(self) -> bool:

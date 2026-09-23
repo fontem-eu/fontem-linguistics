@@ -307,3 +307,30 @@ async def test_nebius_unconfigured_is_a_clear_refusal():
     svc = _mk_nebius(None)
     with pytest.raises(BackendUnavailable, match="nebius"):
         await svc.translate("Roboty", "pl", ["mt"], TranslationBackend.NEBIUS)
+
+
+async def test_the_result_reports_what_the_call_cost():
+    """A caller working to a budget accumulates this rather than estimating
+    from its own token arithmetic — which is what makes a "EUR 5 run" a
+    measurement instead of a hope."""
+    svc = _mk_nebius(FakeNebius(cost_usd=0.00035))
+    result = await svc.translate("Roboty", "pl", ["mt"], TranslationBackend.NEBIUS)
+    assert result.cost_usd == pytest.approx(0.00035)
+
+
+async def test_a_cache_hit_costs_nothing():
+    cache = FakeCache()
+    cache.translations[("Roboty", "pl", "mt", "nebius")] = "Xogħol"
+    nebius = FakeNebius()
+    svc = _mk_nebius(nebius, cache=cache)
+    result = await svc.translate("Roboty", "pl", ["mt"], TranslationBackend.NEBIUS)
+    assert result.cost_usd == 0.0 and nebius.call_count == 0
+
+
+async def test_the_local_backend_is_free():
+    svc = TranslationService(
+        cache=FakeCache(), mistral=None, nllb=FakeMistral(),
+        mistral_breaker=CircuitBreaker(), mistral_spend_cap=SpendCap(daily_cap_usd=1.0),
+    )
+    result = await svc.translate("Roboty", "pl", ["mt"], TranslationBackend.NLLB_LOCAL)
+    assert result.cost_usd == 0.0

@@ -67,7 +67,7 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
                 cached_targets=frozenset(cached.keys()),
             )
 
-        fresh = await self._call_backend(text, source_lang, missing, backend)
+        fresh, cost_usd = await self._call_backend(text, source_lang, missing, backend)
         await self.cache.put_translations(text, source_lang, backend_str, fresh)
 
         merged = {**cached, **fresh}
@@ -84,6 +84,7 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
             translations=merged,
             backend=backend,
             cached_targets=frozenset(cached.keys()),
+            cost_usd=cost_usd,
         )
 
     async def _call_backend(
@@ -92,12 +93,14 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
         source_lang: str,
         missing: list[str],
         backend: TranslationBackend,
-    ) -> dict[str, str]:
+    ) -> tuple[dict[str, str], float]:
+        """``(translations, what it cost)``. Cost is zero where nothing was
+        billed — the local backends, and any path that only read cache."""
         if backend is TranslationBackend.MISTRAL:
-            return await self._call_mistral(text, source_lang, missing)
+            return await self._call_mistral(text, source_lang, missing), 0.0
         if backend is TranslationBackend.NEBIUS:
             return await self._call_nebius(text, source_lang, missing)
-        return await self._call_nllb(text, source_lang, missing)
+        return await self._call_nllb(text, source_lang, missing), 0.0
 
     async def _call_mistral(
         self, text: str, source_lang: str, missing: list[str]
@@ -122,7 +125,7 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
 
     async def _call_nebius(
         self, text: str, source_lang: str, missing: list[str]
-    ) -> dict[str, str]:
+    ) -> tuple[dict[str, str], float]:
         """Same shape as Mistral: breaker, reserve, call, settle.
 
         The reservation is an estimate; `finalize` replaces it with what the
@@ -146,7 +149,7 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
             raise
         await self.nebius_spend_cap.finalize(estimate, actual)
         await self.nebius_breaker.record_success()
-        return result
+        return result, actual
 
     async def _call_nllb(
         self, text: str, source_lang: str, missing: list[str]

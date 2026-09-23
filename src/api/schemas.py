@@ -18,6 +18,10 @@ class TranslateResponse(BaseModel):
     backend: TranslationBackend
     translations: dict[str, str]
     partial_cached_targets: list[str] = []
+    #: What this call cost, as the provider reported it. Zero on a cache hit
+    #: and on the local backends. A caller running to a budget accumulates
+    #: this rather than estimating from its own token arithmetic.
+    cost_usd: float = 0.0
 
 
 class BatchTranslateItem(BaseModel):
