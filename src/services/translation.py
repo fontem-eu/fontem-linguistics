@@ -9,6 +9,7 @@ from loguru import logger
 from src.backends.mistral import MistralBackend, MistralError, MistralTransientError
 from src.backends.nebius import NebiusBackend, NebiusError, NebiusTransientError
 from src.backends.nllb_local import NllbLocalBackend
+from src.backends.openai_chat import UNDETERMINED
 from src.cache.postgres import PostgresCache
 from src.domain.models import (
     BackendUnavailable,
@@ -19,6 +20,19 @@ from src.domain.models import (
 from src.infra.circuit_breaker import CircuitBreaker
 from src.infra.metrics import TRANSLATION_LATENCY, TRANSLATIONS_TOTAL
 from src.infra.spend_cap import SpendCap
+
+
+#: Cache key for results of the identify-the-language-yourself prompt. Its
+#: first wording cached the source text as every target's "translation", and
+#: the cache key does not include the prompt: keying the revised prompt's
+#: output under its own revision means a retry can never be answered with
+#: those copies. Bump the suffix whenever that prompt's wording changes.
+UNDETERMINED_CACHE_KEY = f"{UNDETERMINED}#2"
+
+
+def cache_source(source_lang: str) -> str:
+    """The source-language component of the cache key."""
+    return UNDETERMINED_CACHE_KEY if source_lang == UNDETERMINED else source_lang
 
 
 # The composition point for every translation path: one cache, and per
@@ -52,7 +66,8 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
         backend_str = backend.value
         start = time.perf_counter()
 
-        cached = await self.cache.get_translations(text, source_lang, targets, backend_str)
+        cached = await self.cache.get_translations(
+            text, cache_source(source_lang), targets, backend_str)
         missing = [t for t in targets if t not in cached]
 
         if not missing:
@@ -68,7 +83,7 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
             )
 
         fresh, cost_usd = await self._call_backend(text, source_lang, missing, backend)
-        await self.cache.put_translations(text, source_lang, backend_str, fresh)
+        await self.cache.put_translations(text, cache_source(source_lang), backend_str, fresh)
 
         merged = {**cached, **fresh}
         for _ in cached:

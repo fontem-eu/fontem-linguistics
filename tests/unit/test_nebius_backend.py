@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from src.backends.nebius import NebiusBackend, NebiusError, NebiusTransientError
+from src.backends.openai_chat import build_translate_prompt
 
 pytestmark = pytest.mark.asyncio
 
@@ -144,6 +145,17 @@ async def test_an_undetermined_source_asks_the_model_to_look():
         return _completion({"en": "Wind turbine procurement", "mt": "x"})
 
     await _build(handler).translate("Anskaffelse av vindturbiner", "und", ["en", "mt"])
-    assert "Identify the language" in seen["prompt"]
-    assert "return the text unchanged" in seen["prompt"]
+    assert "may equal the original text only for the language" in seen["prompt"]
+    assert '"source_lang"' in seen["prompt"]
+    assert "return the text unchanged" not in seen["prompt"]
     assert "from und" not in seen["prompt"]
+
+
+def test_a_known_source_prompt_is_unchanged():
+    """Only the undetermined wording moved; the known-source prompt, whose
+    output is already cached and correct, reads exactly as before."""
+    assert build_translate_prompt("Travaux", "fr", ["de", "en"]) == (
+        "Translate the following text from French into the target languages. "
+        "Preserve institutional terminology, do not paraphrase. Return strict "
+        'JSON with keys: "de", "en". No prose, no explanation.\n'
+        "Target languages: de (German), en (English).\nText: Travaux")

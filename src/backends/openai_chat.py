@@ -44,28 +44,32 @@ UNDETERMINED = "und"
 def build_translate_prompt(text: str, source_lang: str, targets: list[str]) -> str:
     """One prompt, one JSON object back, keyed by language code.
 
-    With ``source_lang="und"`` the model is asked to identify the language
-    itself, and any target that turns out to BE the source comes back as the
-    original text — so the caller can ask for every language without first
-    knowing which one it already has.
+    With ``source_lang="und"`` the caller does not know the language, so the
+    model is asked for every target and for the ``source_lang`` it found. The
+    first wording ("for a target that is the text's own language, return the
+    text unchanged") made Gemma return the source for EVERY target: 1,127 of
+    1,392 strings on the first prod run. The wording below held copies to
+    the source language alone on the same titles.
     """
-    keys = ", ".join(f'"{t}"' for t in targets)
     pretty = ", ".join(f"{code} ({lang_fullname(code)})" for code in targets)
     if source_lang == UNDETERMINED:
+        keys = ", ".join(f'"{t}"' for t in ["source_lang", *targets])
         opening = (
-            "Identify the language of the following text and translate it into "
-            "the target languages; for a target that is the text's own "
-            "language, return the text unchanged. Preserve institutional "
+            "Translate the following text into every target language below. "
+            "Write each value in its own target language; a value may equal the "
+            "original text only for the language the text is already written in. "
+            'Also give "source_lang": the ISO 639-1 code of the text\'s language. '
         )
     else:
+        keys = ", ".join(f'"{t}"' for t in targets)
         opening = (
             "Translate the following text from "
-            f"{lang_fullname(source_lang)} into the target languages. Preserve institutional "
+            f"{lang_fullname(source_lang)} into the target languages. "
         )
     return (
         opening +
-        "terminology, do not paraphrase. Return strict JSON with keys: "
-        f"{keys}. No prose, no explanation.\n"
+        "Preserve institutional terminology, do not paraphrase. Return strict "
+        f"JSON with keys: {keys}. No prose, no explanation.\n"
         f"Target languages: {pretty}.\n"
         f"Text: {text}"
     )
