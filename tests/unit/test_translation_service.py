@@ -14,7 +14,7 @@ from src.domain.models import (
 from src.backends.nebius import NebiusTransientError
 from src.infra.circuit_breaker import CircuitBreaker
 from src.infra.spend_cap import SpendCap
-from src.services.translation import TranslationService
+from src.services.translation import TranslationService, UNDETERMINED_CACHE_KEY, cache_source
 
 
 pytestmark = pytest.mark.asyncio
@@ -334,3 +334,37 @@ async def test_the_local_backend_is_free():
     )
     result = await svc.translate("Roboty", "pl", ["mt"], TranslationBackend.NLLB_LOCAL)
     assert result.cost_usd == 0.0
+
+
+# ── undetermined source: the cache holds copies from the old prompt ──
+
+
+async def test_copies_cached_by_the_old_undetermined_prompt_are_never_served():
+    """The first identify-the-language prompt cached the source text as
+    every target's translation, keyed 'und'. The revised prompt's results
+    live under their own revision, so a retry reaches the model."""
+    cache = FakeCache()
+    title = "Interinstitutional fwc for agency staff"
+    await cache.put_translations(title, "und", "nebius", {"de": title, "pt": title})
+    nebius = FakeNebius()
+    svc = _mk_nebius(nebius, cache=cache)
+
+    result = await svc.translate(title, "und", ["de", "pt"], TranslationBackend.NEBIUS)
+
+    assert nebius.call_count == 1
+    assert result.translations == {"de": f"de:{title}", "pt": f"pt:{title}"}
+    assert (title, UNDETERMINED_CACHE_KEY, "de", "nebius") in cache.translations
+
+
+async def test_a_known_source_keeps_its_cache_key():
+    """Only the undetermined path moved: known-source translations already
+    cached stay cached, and are not paid for again."""
+    cache = FakeCache()
+    await cache.put_translations("Roboty", "pl", "nebius", {"de": "Bauarbeiten"})
+    nebius = FakeNebius()
+    svc = _mk_nebius(nebius, cache=cache)
+
+    result = await svc.translate("Roboty", "pl", ["de"], TranslationBackend.NEBIUS)
+
+    assert nebius.call_count == 0 and result.translations == {"de": "Bauarbeiten"}
+    assert cache_source("pl") == "pl"
