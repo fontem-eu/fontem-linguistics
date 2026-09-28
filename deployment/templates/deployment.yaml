@@ -107,7 +107,7 @@ spec:
               mountPath: {{ .Values.localModelsPath | quote }}
       containers:
         - name: api
-          image: contribute.void42.internal/golden/fontem-linguistics:{{ .Values.version }}
+          image: contribute.void42.internal/fontem/fontem-linguistics:{{ .Values.version }}
           ports:
             - containerPort: 8080
           env:

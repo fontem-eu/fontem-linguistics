@@ -60,33 +60,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Docker
-        run: curl -fsSL https://nexus.void42.internal/repository/docker-releases/linux/static/stable/x86_64/docker-27.5.1.tgz | tar xz --strip-components=1 -C /usr/local/bin docker/docker
-      - name: Build and push image
-        run: |
-          TAG="v$(git rev-parse --short HEAD)"
-          echo "TAG=$TAG" >> $GITHUB_ENV
-          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login gitea-http.dev-tools.svc.cluster.local:3000 -u "${{ secrets.REGISTRY_USER }}" --password-stdin
-          docker build --network host -t gitea-http.dev-tools.svc.cluster.local:3000/fontem/fontem-linguistics:$TAG .
-          docker push gitea-http.dev-tools.svc.cluster.local:3000/fontem/fontem-linguistics:$TAG
-          # Signed and attested by digest, never by tag: a tag can be
-          # re-pointed after signing.
-          DIGEST=$(docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "gitea-http.dev-tools.svc.cluster.local:3000/fontem/fontem-linguistics:$TAG" | grep -oE 'sha256:[0-9a-f]{64}' | head -1 || true)
-          [ -n "$DIGEST" ] || { echo "::error::could not resolve the pushed digest for fontem-linguistics:$TAG"; exit 1; }
-          echo "DIGEST=$DIGEST" >> $GITHUB_ENV
-      - name: Sign image with Cosign
-        env:
-          COSIGN_PASSWORD: ""
-          COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
-        run: |
-          curl -sL https://nexus.void42.internal/repository/github-releases/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 -o /usr/local/bin/cosign
-          chmod +x /usr/local/bin/cosign
-          echo "$COSIGN_KEY" > /tmp/cosign.key
-          # --tlog-upload=false: the image is private; nothing goes to the
-          # public Rekor log (the cluster verifies with ignoreTlog).
-          cosign sign --tlog-upload=false --key /tmp/cosign.key --yes --allow-http-registry "gitea-http.dev-tools.svc.cluster.local:3000/fontem/fontem-linguistics@$DIGEST"
-          rm /tmp/cosign.key
+      - uses: actions/checkout@v4
+        with:
+          repository: void42/ci-actions
+          path: .ci-actions
+          token: ${{ secrets.CI_READ_TOKEN }}
+      # The shared action builds, pushes, signs and attests a full-image
+      # SBOM (syft plus the runtime-bundled libraries it misses) by digest,
+      # then checks both artifacts reached the registry. That attestation
+      # is what feeds Dependency-Track; the previous inline build signed
+      # but never attested, so this production service had no SBOM there.
+      - name: Build, push, sign, attest
+        id: img
+        uses: ./.ci-actions/actions/docker-build-sign
+        with:
+          image: contribute.void42.internal/fontem/fontem-linguistics
+          cosign-key: ${{ secrets.COSIGN_KEY }}
+          registry-user: ${{ secrets.REGISTRY_USER }}
+          registry-password: ${{ secrets.REGISTRY_PASSWORD }}
       - name: Deploy to gitops (prod — singleton)
+        env:
+          TAG: ${{ steps.img.outputs.tag }}
         run: |
           git clone --depth=1 "http://${{ secrets.REGISTRY_USER }}:${{ secrets.REGISTRY_PASSWORD }}@gitea-http.dev-tools.svc.cluster.local:3000/fontem/gitops.git" /tmp/gitops
           cd /tmp/gitops
