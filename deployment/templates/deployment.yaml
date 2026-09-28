@@ -55,10 +55,15 @@ spec:
                    os.environ["MINILM_MODEL_PATH"]),
               ]
               for repo, rev, dest in targets:
-                  # Skip if the dir already exists AND has the sentinel config
-                  # file — makes pod restarts on an emptyDir a no-op the second
-                  # time (relevant only if the pod restarts without reschedule).
-                  if os.path.isfile(os.path.join(dest, "config.json")):
+                  # A marker written only after the whole snapshot landed.
+                  # config.json alone arrives first, so an init container
+                  # OOMKilled mid-download (2026-09-28: LaBSE at 134 MB of
+                  # 1.88 GB) left a dir that every restart then skipped,
+                  # and /embed with labse-local 500'd for want of weights.
+                  # Without the marker, snapshot_download resumes the
+                  # .incomplete files instead.
+                  marker = os.path.join(dest, ".fetch-complete")
+                  if os.path.isfile(marker) and open(marker).read().strip() == f"{repo}@{rev}":
                       print(f"[fetch] {repo}@{rev[:7]} already present at {dest}")
                       continue
                   print(f"[fetch] {repo}@{rev[:7]} -> {dest}")
@@ -66,13 +71,19 @@ spec:
                       repo_id=repo,
                       revision=rev,
                       local_dir=dest,
+                      # Every module's config (2_Dense/config.json included:
+                      # LaBSE will not load without it), the tokenizer, and
+                      # safetensors weights only. The .bin duplicates were
+                      # another 1.9 GB for LaBSE and part of the OOM.
                       allow_patterns=[
-                          "config.json", "tokenizer*", "special_tokens_map*",
-                          "sentence_bert_config.json", "modules.json",
-                          "1_Pooling/*", "2_Normalize/*",
-                          "*.safetensors", "*.bin",
+                          "*.json", "vocab.txt", "*.model", "*.safetensors",
                       ],
+                      # One file at a time: parallel multi-GB streams are
+                      # what pushed the container past its memory limit.
+                      max_workers=1,
                   )
+                  with open(marker, "w") as fh:
+                      fh.write(f"{repo}@{rev}")
               print("[fetch] done")
               PY
           env:
@@ -90,7 +101,7 @@ spec:
               value: "{{ .Values.localModelsPath }}/minilm-{{ .Values.minilmMirrorVersion }}"
           resources:
             requests: { cpu: "200m", memory: "512Mi" }
-            limits:   { cpu: "1",    memory: "2Gi" }
+            limits:   { cpu: "1",    memory: "4Gi" }
           volumeMounts:
             - name: models
               mountPath: {{ .Values.localModelsPath | quote }}
