@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 
 import httpx
 
@@ -94,6 +95,59 @@ def parse_translation_response(
     if missing:
         raise error_cls(f"missing/malformed target(s) in response: {missing}")
     return {t: parsed[t] for t in targets}, (data.get("usage") or {})
+
+
+#: What a detection may answer: a two-letter ISO 639-1 code, or "und".
+_LANG_CODE = re.compile(r"^(?:[a-z]{2}|und)$")
+
+
+def build_detect_prompt(texts: list[str]) -> str:
+    """Ask for each text's language, keyed by its position.
+
+    Keys rather than a list so an answer cannot slide one place along: a
+    skipped item leaves its key missing instead of shifting every later
+    code onto the wrong text. Judged from the words, because a Swedish
+    buyer's English title is English. The EU's languages are named as the
+    expected set: without them Gemma called Croatian and Slovene titles
+    Serbian, which no EU notice is written in.
+    """
+    listing = json.dumps({str(i): t for i, t in enumerate(texts)}, ensure_ascii=False)
+    expected = ", ".join(f"{code} ({name})" for code, name in LANG_FULLNAMES.items())
+    return (
+        "Identify the language each text below is written in, judged from its "
+        "ordinary words, not from any country, city or organisation it names. The "
+        f"texts are public procurement titles, almost always in one of: {expected}. "
+        "Answer another ISO 639-1 code only when a text is plainly in none of these "
+        '(for example Norwegian, "no"). Answer "und" only when a text has no '
+        "ordinary words at all: nothing but numbers, reference codes or names. "
+        "Return strict JSON with the same keys as the input, each mapped to a "
+        "two-letter lowercase code or \"und\". No prose, no explanation.\n"
+        f"Texts: {listing}"
+    )
+
+
+def parse_detect_response(
+    data: dict, n_texts: int, error_cls: type[Exception],
+) -> tuple[list[str | None], dict]:
+    """``([code or None per text], usage)``.
+
+    An unreadable completion is an error for the whole call; one text left
+    unanswered, or answered with something that is not a language code, is
+    None for that text alone. Its neighbours' answers stand on their own keys.
+    """
+    try:
+        content = data["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+    except (KeyError, IndexError, json.JSONDecodeError) as exc:
+        raise error_cls(f"malformed chat response: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise error_cls("malformed chat response: not a JSON object")
+    codes: list[str | None] = []
+    for i in range(n_texts):
+        value = parsed.get(str(i))
+        code = value.strip().lower() if isinstance(value, str) else ""
+        codes.append(code if _LANG_CODE.match(code) else None)
+    return codes, (data.get("usage") or {})
 
 
 async def post_with_retries(  # pylint: disable=too-many-arguments,too-many-positional-arguments

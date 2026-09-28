@@ -1,4 +1,4 @@
-"""Nebius AI Studio chat backend — translation only.
+"""Nebius AI Studio chat backend — translation and language identification.
 
 Why it exists: Mistral is priced for a product that occasionally translates a
 name, not for translating millions of contract titles into 23 languages.
@@ -21,7 +21,9 @@ from dataclasses import dataclass
 import httpx
 
 from src.backends.openai_chat import (
+    build_detect_prompt,
     build_translate_prompt,
+    parse_detect_response,
     parse_translation_response,
     post_with_retries,
     price_usd,
@@ -110,6 +112,24 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         self._record_chat_spend(usage)
         return translations, cost
 
+    async def detect_with_cost(self, texts: list[str]) -> tuple[list[str | None], float]:
+        """Each text's ISO 639-1 code (None where the model gave none), and
+        what the call was charged. One call for the whole list."""
+        payload = {
+            "model": self.chat_model,
+            "messages": [{"role": "user", "content": build_detect_prompt(texts)}],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.0,
+        }
+        data = await post_with_retries(
+            self.client, "/chat/completions", payload,
+            max_retries=self.max_retries,
+            transient_cls=NebiusTransientError, error_cls=NebiusError,
+        )
+        codes, usage = parse_detect_response(data, len(texts), NebiusError)
+        self._record_chat_spend(usage)
+        return codes, self.actual_chat_usd(usage)
+
     async def aclose(self) -> None:
         await self.client.aclose()
 
@@ -129,6 +149,16 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         """
         est_in_tokens = max(40, text_chars // 4 + 80)
         est_out_tokens = max(20, n_targets * text_chars // 4)
+        return (
+            est_in_tokens * self.price_input_per_mtok
+            + est_out_tokens * self.price_output_per_mtok
+        ) / 1_000_000
+
+    def estimate_detect_usd(self, text_chars: int, n_texts: int) -> float:
+        """Pre-call reservation for a detection: the texts plus the
+        instruction in, one short key-and-code pair per text out."""
+        est_in_tokens = text_chars // 4 + 120 + 4 * n_texts
+        est_out_tokens = 10 * n_texts + 10
         return (
             est_in_tokens * self.price_input_per_mtok
             + est_out_tokens * self.price_output_per_mtok

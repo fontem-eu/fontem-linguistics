@@ -44,6 +44,26 @@ class BatchTranslateResponse(BaseModel):
     results: list[TranslateResponse]
 
 
+class DetectRequest(BaseModel):
+    texts: list[str] = Field(min_length=1, max_length=256)
+    backend: TranslationBackend = TranslationBackend.NEBIUS
+
+
+class DetectedLanguage(BaseModel):
+    #: ISO 639-1 code; "und" where the text has no words to judge by; None
+    #: where no usable answer came back (then `error` says why).
+    lang: str | None
+    error: str | None = None
+
+
+class DetectResponse(BaseModel):
+    backend: TranslationBackend
+    #: "<backend>:<model>" that answered, for callers that record provenance.
+    model: str | None
+    results: list[DetectedLanguage]
+    cost_usd: float = 0.0
+
+
 class EmbedRequest(BaseModel):
     text: str = Field(min_length=1, max_length=8192)
     backend: EmbeddingBackend

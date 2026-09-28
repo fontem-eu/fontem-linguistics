@@ -15,6 +15,9 @@ from src.api.schemas import (
     EmbedBatchResponse,
     BatchTranslateRequest,
     BatchTranslateResponse,
+    DetectedLanguage,
+    DetectRequest,
+    DetectResponse,
     EmbedRequest,
     EmbedResponse,
     LanguageInfo,
@@ -32,6 +35,7 @@ from src.domain.models import (
     BackendUnavailable,
     CircuitOpen,
     SpendCapExceeded,
+    TranslationBackend,
 )
 
 #: What one batch item may fail with and still let the rest of the batch
@@ -160,6 +164,54 @@ async def translate_batch(
             _IDEMPOTENCY_STORE.popitem(last=False)
 
     return response
+
+
+#: Texts per detection prompt. Measured 2026-09-28 on 220 prod titles with
+#: a stated language: 214 right at 20 per prompt, 212 at 40, for about
+#: USD 0.008 per thousand titles either way.
+DETECT_CHUNK = 20
+
+
+@router.post(
+    "/detect",
+    responses={
+        400: {"description": "An empty text, or a backend that does not detect."},
+    },
+)
+async def detect(req: DetectRequest, request: Request) -> DetectResponse:
+    """Each text's language, in request order.
+
+    Like the translation batch, a chunk that fails marks its own texts with
+    the reason and the rest still answer: a caller keeping what it paid for
+    must not lose it to one refused chunk.
+    """
+    svc = _services(request).translation
+    if any(not t or not t.strip() for t in req.texts):
+        raise HTTPException(status_code=400, detail="every text must be non-empty")
+    if req.backend is not TranslationBackend.NEBIUS:
+        raise HTTPException(status_code=400,
+                            detail="language detection is served by the nebius backend only")
+    window = asyncio.Semaphore(request.app.state.settings.batch_max_concurrency)
+    chunks = [req.texts[i:i + DETECT_CHUNK] for i in range(0, len(req.texts), DETECT_CHUNK)]
+
+    async def _one(chunk: list[str]) -> tuple[list[DetectedLanguage], float, str | None]:
+        async with window:
+            try:
+                result = await svc.detect(chunk, req.backend)
+            except _BATCH_ITEM_FAILURES as exc:
+                logger.warning("detect chunk failed error={}", exc)
+                reason = f"{type(exc).__name__}: {exc}"
+                return [DetectedLanguage(lang=None, error=reason) for _ in chunk], 0.0, None
+        return ([DetectedLanguage(lang=lang, error=None if lang else "no answer for this text")
+                 for lang in result.langs], result.cost_usd, result.model)
+
+    answered = await asyncio.gather(*[_one(c) for c in chunks])
+    return DetectResponse(
+        backend=req.backend,
+        model=next((m for _r, _c, m in answered if m), None),
+        results=[r for rs, _c, _m in answered for r in rs],
+        cost_usd=sum(c for _r, c, _m in answered),
+    )
 
 
 @router.post(

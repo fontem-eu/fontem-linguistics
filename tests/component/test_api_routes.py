@@ -449,3 +449,79 @@ def test_batch_runs_inside_a_bounded_window(app_and_state):
     assert r.status_code == 200
     assert len(r.json()["results"]) == 10
     assert live["peak"] <= 2
+
+
+# ── /detect ─────────────────────────────────────────────────────────
+
+
+def _detect_app(handler):
+    """The app with a Nebius backend whose provider is `handler`."""
+    from fastapi import FastAPI
+    from src.backends.nebius import NebiusBackend
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler),
+                               base_url="https://nebius.test/v1")
+    nebius = NebiusBackend(
+        api_url="https://nebius.test/v1", api_key="test-key-never-used",
+        chat_model="google/gemma-3-27b-it", timeout_s=5.0, max_retries=0,
+        price_input_per_mtok=0.13, price_output_per_mtok=0.40, client=client,
+    )
+    translation = TranslationService(
+        cache=InMemoryCache(), mistral=None, nllb=None,
+        mistral_breaker=CircuitBreaker(), mistral_spend_cap=SpendCap(daily_cap_usd=1.0),
+        nebius=nebius, nebius_breaker=CircuitBreaker(failure_threshold=1.0, min_requests=1000),
+        nebius_spend_cap=SpendCap(daily_cap_usd=1.0),
+    )
+    app = FastAPI()
+    app.include_router(api_router)
+    app.state.services = Services(translation=translation, embedding=None)
+    app.state.settings = Settings(database_url="postgresql://unused")
+    return app
+
+
+def _answer_each_text_with_its_first_word(request: httpx.Request) -> httpx.Response:
+    import json
+    import re
+    prompt = json.loads(request.content)["messages"][0]["content"]
+    texts = json.loads(prompt[prompt.index("Texts: ") + len("Texts: "):])
+    answer = {k: re.sub(r"\W", "", v.split()[0])[:2].lower() for k, v in texts.items()}
+    return httpx.Response(200, json={
+        "choices": [{"message": {"content": json.dumps(answer)}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 10},
+    })
+
+
+def test_detect_answers_every_text_in_request_order_across_chunks():
+    """45 texts are three prompts of at most 20; the answers come back in
+    the order asked, and the cost is the sum of the three calls."""
+    app = _detect_app(_answer_each_text_with_its_first_word)
+    texts = [f"{code} text {i}" for i, code in enumerate(["fr", "de", "pl"] * 15)]
+    r = TestClient(app).post("/detect", json={"texts": texts})
+    assert r.status_code == 200
+    body = r.json()
+    assert [x["lang"] for x in body["results"]] == ["fr", "de", "pl"] * 15
+    assert body["model"] == "nebius:google/gemma-3-27b-it"
+    assert body["cost_usd"] == pytest.approx(3 * (100 * 0.13 + 10 * 0.40) / 1e6)
+
+
+def test_a_failed_chunk_marks_its_own_texts_and_the_rest_still_answer():
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(400, text="bad request")
+        return _answer_each_text_with_its_first_word(request)
+
+    app = _detect_app(handler)
+    texts = [f"fr text {i}" for i in range(25)]
+    body = TestClient(app).post("/detect", json={"texts": texts}).json()
+    langs = [x["lang"] for x in body["results"]]
+    assert langs.count(None) == 20 and langs.count("fr") == 5
+    assert all(x["error"].startswith("NebiusError") for x in body["results"] if x["lang"] is None)
+
+
+def test_detect_refuses_an_empty_text_and_a_backend_that_does_not_detect():
+    app = _detect_app(_answer_each_text_with_its_first_word)
+    client = TestClient(app)
+    assert client.post("/detect", json={"texts": ["fr a", "  "]}).status_code == 400
+    assert client.post("/detect", json={"texts": ["fr a"], "backend": "mistral"}).status_code == 400
