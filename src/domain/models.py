@@ -41,6 +41,19 @@ class TranslationResult:
 
 
 @dataclass(frozen=True)
+class DetectionResult:
+    """Each text's language as the model identified it, and at what price."""
+
+    #: ISO 639-1 code, "und" where the text has no words to judge by, None
+    #: where the model gave no usable answer for that text.
+    langs: list[str | None]
+    #: Which model answered, as "<backend>:<model>", so a caller that keeps
+    #: the answer can say where it came from.
+    model: str
+    cost_usd: float = 0.0
+
+
+@dataclass(frozen=True)
 class EmbeddingRequest:
     text: str
     backend: EmbeddingBackend

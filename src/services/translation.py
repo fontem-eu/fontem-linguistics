@@ -14,6 +14,7 @@ from src.cache.postgres import PostgresCache
 from src.domain.models import (
     BackendUnavailable,
     CircuitOpen,
+    DetectionResult,
     TranslationBackend,
     TranslationResult,
 )
@@ -101,6 +102,36 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
             cached_targets=frozenset(cached.keys()),
             cost_usd=cost_usd,
         )
+
+    async def detect(self, texts: list[str], backend: TranslationBackend) -> DetectionResult:
+        """Identify each text's language in one call. Nebius only.
+
+        Not cached: a caller that needs the answer again keeps it, and the
+        call costs a fraction of a translation. Same breaker and budget as
+        Nebius translation, so detection cannot outspend the daily cap.
+        """
+        if not texts or any(not t or not t.strip() for t in texts):
+            raise ValueError("every text must be non-empty")
+        if backend is not TranslationBackend.NEBIUS:
+            raise ValueError("language detection is served by the nebius backend only")
+        if self.nebius is None or self.nebius_breaker is None or self.nebius_spend_cap is None:
+            raise BackendUnavailable("nebius backend not configured")
+        if not await self.nebius_breaker.allow():
+            raise CircuitOpen("nebius circuit breaker is open")
+
+        estimate = self.nebius.estimate_detect_usd(sum(len(t) for t in texts), len(texts))
+        await self.nebius_spend_cap.reserve(estimate)
+        try:
+            langs, actual = await self.nebius.detect_with_cost(texts)
+        except (NebiusTransientError, NebiusError) as exc:
+            await self.nebius_breaker.record_failure()
+            await self.nebius_spend_cap.release(estimate)
+            logger.warning("nebius detect failure: {}", exc)
+            raise
+        await self.nebius_spend_cap.finalize(estimate, actual)
+        await self.nebius_breaker.record_success()
+        return DetectionResult(langs=langs, model=f"nebius:{self.nebius.chat_model}",
+                               cost_usd=actual)
 
     async def _call_backend(
         self,

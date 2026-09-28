@@ -250,6 +250,17 @@ class FakeNebius:
         got, _cost = await self.translate_with_cost(text, source_lang, targets)
         return got
 
+    chat_model: str = "google/gemma-3-27b-it"
+
+    def estimate_detect_usd(self, text_chars, n_texts):
+        return 0.00001
+
+    async def detect_with_cost(self, texts):
+        self.call_count += 1
+        if self.raises:
+            raise self.raises
+        return ["pl" for _ in texts], self.cost_usd
+
 
 def _mk_nebius(nebius, cap_usd: float = 10.0, cache=None) -> TranslationService:
     return TranslationService(
@@ -368,3 +379,40 @@ async def test_a_known_source_keeps_its_cache_key():
 
     assert nebius.call_count == 0 and result.translations == {"de": "Bauarbeiten"}
     assert cache_source("pl") == "pl"
+
+
+# ── language detection ────────────────────────────────────────────
+
+
+async def test_detection_says_which_model_answered_and_what_it_cost():
+    svc = _mk_nebius(FakeNebius(cost_usd=0.0002))
+    result = await svc.detect(["Roboty", "Dostawa"], TranslationBackend.NEBIUS)
+    assert result.langs == ["pl", "pl"]
+    assert result.model == "nebius:google/gemma-3-27b-it"
+    assert result.cost_usd == pytest.approx(0.0002)
+    assert svc.nebius_spend_cap.spent_usd == pytest.approx(0.0002)
+
+
+async def test_detection_spends_from_the_same_daily_cap():
+    nebius = FakeNebius(cost_usd=0.5)
+    svc = _mk_nebius(nebius, cap_usd=0.4)
+    await svc.detect(["a"], TranslationBackend.NEBIUS)
+    with pytest.raises(SpendCapExceeded):
+        await svc.detect(["b"], TranslationBackend.NEBIUS)
+    assert nebius.call_count == 1
+
+
+async def test_a_failed_detection_releases_its_reservation():
+    svc = _mk_nebius(FakeNebius(raises=NebiusTransientError("503")))
+    with pytest.raises(NebiusTransientError):
+        await svc.detect(["Roboty"], TranslationBackend.NEBIUS)
+    assert svc.nebius_spend_cap.spent_usd == 0.0
+
+
+async def test_detection_is_nebius_only_and_needs_it_configured():
+    with pytest.raises(ValueError, match="nebius"):
+        await _mk_nebius(FakeNebius()).detect(["Roboty"], TranslationBackend.MISTRAL)
+    with pytest.raises(BackendUnavailable, match="nebius"):
+        await _mk_nebius(None).detect(["Roboty"], TranslationBackend.NEBIUS)
+    with pytest.raises(ValueError, match="non-empty"):
+        await _mk_nebius(FakeNebius()).detect(["Roboty", " "], TranslationBackend.NEBIUS)

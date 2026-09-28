@@ -7,7 +7,11 @@ import httpx
 import pytest
 
 from src.backends.nebius import NebiusBackend, NebiusError, NebiusTransientError
-from src.backends.openai_chat import build_translate_prompt
+from src.backends.openai_chat import (
+    build_detect_prompt,
+    build_translate_prompt,
+    parse_detect_response,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -159,3 +163,41 @@ def test_a_known_source_prompt_is_unchanged():
         "Preserve institutional terminology, do not paraphrase. Return strict "
         'JSON with keys: "de", "en". No prose, no explanation.\n'
         "Target languages: de (German), en (English).\nText: Travaux")
+
+
+# ── language detection ──────────────────────────────────────────────
+
+
+async def test_detect_asks_once_with_each_text_under_its_own_key():
+    seen = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return _completion({"0": "pl", "1": "en"}, {"prompt_tokens": 400, "completion_tokens": 20})
+
+    codes, cost = await _build(handler).detect_with_cost(["Roboty budowlane", "Road works"])
+    assert codes == ["pl", "en"]
+    assert cost == pytest.approx((400 * 0.13 + 20 * 0.40) / 1e6)
+    prompt = seen["body"]["messages"][0]["content"]
+    assert '"0": "Roboty budowlane"' in prompt and '"1": "Road works"' in prompt
+    assert seen["body"]["response_format"] == {"type": "json_object"}
+
+
+async def test_the_detect_prompt_names_the_eu_languages_as_the_expected_set():
+    """Without them Gemma called Croatian and Slovene titles Serbian."""
+    prompt = build_detect_prompt(["Nabava serverske infrastrukture"])
+    for name in ("hr (Croatian)", "sl (Slovene)", "mt (Maltese)", "ga (Irish)"):
+        assert name in prompt
+
+
+async def test_an_unanswered_or_malformed_item_is_none_and_its_neighbours_stand():
+    data = {"choices": [{"message": {"content": json.dumps(
+        {"0": "FR", "2": "Swedish", "3": "und", "4": 7})}}]}
+    codes, _usage = parse_detect_response(data, 5, NebiusError)
+    assert codes == ["fr", None, None, "und", None]
+
+
+async def test_an_unreadable_detection_is_an_error_for_the_call():
+    data = {"choices": [{"message": {"content": "[\"fr\"]"}}]}
+    with pytest.raises(NebiusError, match="not a JSON object"):
+        parse_detect_response(data, 1, NebiusError)
