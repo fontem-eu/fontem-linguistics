@@ -54,16 +54,6 @@ jobs:
       - uses: ./.ci-actions/actions/sonar-scan
         with:
           sonar-token: ${{ secrets.SONAR_TOKEN }}
-      - name: Generate SBOM
-        run: cyclonedx-py requirements requirements.txt --of json -o sbom.json
-      - name: Upload SBOM to Dependency-Track
-        run: |
-          curl -fsS -X POST "http://dependency-track.dependency-track.svc.cluster.local:8080/api/v1/bom" \
-            -H "X-Api-Key: ${{ secrets.DTRACK_API_KEY }}" \
-            -H "Content-Type: multipart/form-data" \
-            -F "projectName=fontem-linguistics" -F "projectVersion=$(git rev-parse --short HEAD)" \
-            -F "autoCreate=true" -F "bom=@sbom.json"
-
   build-deploy:
     needs: test
     if: github.ref == 'refs/heads/main'
