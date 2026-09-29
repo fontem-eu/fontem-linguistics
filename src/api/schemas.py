@@ -1,6 +1,9 @@
 """Request/response models for the HTTP API."""
 from __future__ import annotations
 
+import datetime as dt
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from src.domain.models import EmbeddingBackend, TranslationBackend
@@ -119,3 +122,44 @@ class EmbedBatchResponse(BaseModel):
     dim: int
     encoder_id: str
     results: list[EmbedResponse]
+
+
+class JobItemModel(BaseModel):
+    #: The caller's own reference; results come back under it.
+    id: str = Field(min_length=1, max_length=64)
+    text: str = Field(min_length=1, max_length=8192)
+    source_lang: str = Field(min_length=2, max_length=8)
+    targets: list[str] = Field(min_length=1, max_length=24)
+
+
+class JobSubmitRequest(BaseModel):
+    items: list[JobItemModel] = Field(min_length=1, max_length=5000)
+    backend: TranslationBackend = TranslationBackend.NEBIUS
+    #: None takes the service's configured mode (JOB_MODE).
+    mode: Literal["auto", "provider", "realtime"] | None = None
+
+
+class JobItemResultModel(BaseModel):
+    id: str
+    translations: dict[str, str] = {}
+    #: Why this item has no translations, when it has none.
+    error: str | None = None
+    #: True when sending the same item again later can succeed (budget,
+    #: breaker, provider hiccup); False when this text itself failed.
+    retryable: bool = False
+    cost_usd: float = 0.0
+
+
+class JobResponse(BaseModel):
+    job_id: str
+    #: "provider" (a Nebius batch) or "realtime" (translated by this service).
+    mode: str
+    #: queued, running, completed, or failed (the whole job: provider lost it).
+    status: str
+    n_items: int
+    cost_usd: float = 0.0
+    error: str | None = None
+    created_at: dt.datetime | None = None
+    completed_at: dt.datetime | None = None
+    #: Every item's result, in submission order, once the job is completed.
+    results: list[JobItemResultModel] | None = None

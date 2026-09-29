@@ -14,11 +14,14 @@ from src.backends.minilm_local import MinilmLocalBackend
 from src.backends.mistral import MistralBackend
 from src.backends.nebius import NebiusBackend
 from src.backends.nllb_local import NllbLocalBackend
+from src.cache.jobs import SCHEMA_SQL as JOBS_SCHEMA_SQL
+from src.cache.jobs import JobStore
 from src.cache.postgres import PostgresCache
 from src.infra.circuit_breaker import CircuitBreaker
 from src.infra.config import Settings, get_settings
 from src.infra.spend_cap import SpendCap
 from src.services.embedding import EmbeddingService
+from src.services.jobs import TranslationJobs
 from src.services.translation import TranslationService
 
 
@@ -55,8 +58,21 @@ def _build_hosted_backends(
             max_retries=settings.nebius_max_retries,
             price_input_per_mtok=settings.nebius_price_input_per_mtok,
             price_output_per_mtok=settings.nebius_price_output_per_mtok,
+            batch_price_input_per_mtok=settings.nebius_batch_price_input_per_mtok,
+            batch_price_output_per_mtok=settings.nebius_batch_price_output_per_mtok,
         )
     return mistral, nebius
+
+
+def _build_jobs(settings: Settings, cache: PostgresCache,
+                translation: TranslationService) -> TranslationJobs:
+    """Translation jobs over the cache's pool, as configured."""
+    return TranslationJobs(
+        JobStore(cache.pool), translation,
+        mode=settings.job_mode, max_concurrency=settings.job_max_concurrency,
+        provider_retry_s=settings.job_provider_retry_s, lease_s=settings.job_lease_s,
+        poll_s=settings.job_poll_s, retention_days=settings.job_retention_days,
+    )
 
 
 # Startup sequence: six backends, two breakers, two budgets and two
@@ -119,7 +135,9 @@ async def lifespan(  # pylint: disable=too-many-locals
         cache=cache, mistral=mistral, labse=labse, minilm=minilm,
         mistral_breaker=breaker, mistral_spend_cap=spend_cap,
     )
-    application.state.services = Services(translation=translation, embedding=embedding)
+    jobs = _build_jobs(settings, cache, translation)
+    application.state.services = Services(translation=translation, embedding=embedding,
+                                          jobs=jobs)
 
     # Warm the local encoder-only backends BEFORE opening the port.
     # First-request cold-start on SentenceTransformer.encode is ~3s for
@@ -139,9 +157,13 @@ async def lifespan(  # pylint: disable=too-many-locals
         mistral is not None, True, True, True,
     )
 
+    # Realtime translation jobs run in the pod; a job claimed by a pod that
+    # went away is picked up here once its claim lapses.
+    jobs.start()
     try:
         yield
     finally:
+        await jobs.stop()
         for provider in (mistral, nebius):
             if provider is not None:
                 await provider.aclose()
@@ -188,6 +210,7 @@ async def _ensure_schema(cache: PostgresCache) -> None:
         await con.execute(
             "CREATE INDEX IF NOT EXISTS embeddings_backend_idx ON embeddings (backend)"
         )
+        await con.execute(JOBS_SCHEMA_SQL)
 
 
 def build_app(settings: Settings | None = None) -> FastAPI:

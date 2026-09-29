@@ -53,3 +53,12 @@ BREAKER_STATE = Gauge(
 
 CACHE_HITS = Counter("cache_hits_total", "Cache hits.", ["resource"])
 CACHE_MISSES = Counter("cache_misses_total", "Cache misses.", ["resource"])
+
+# Translation jobs. "event" is submitted / completed / failed / refused (the
+# provider would not take a batch); "outcome" per item is ok / retryable /
+# failed. Items per minute here is the pipeline's throughput.
+TRANSLATION_JOBS = Counter(
+    "translation_jobs_total", "Translation jobs by mode and event.", ["mode", "event"])
+TRANSLATION_JOB_ITEMS = Counter(
+    "translation_job_items_total", "Translation job items by mode and outcome.",
+    ["mode", "outcome"])
