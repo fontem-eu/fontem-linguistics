@@ -1,0 +1,12 @@
+# Tests, lint and audits (CI only; never installed into the image).
+-r requirements.txt
+pytest>=9.0.3
+pytest-asyncio>=0.24
+pytest-cov>=5.0
+pytest-httpx>=0.30
+testcontainers[postgres]>=4.0
+pylint>=3.0
+bandit>=1.7
+pip-audit>=2.7
+safety>=3.2
+cyclonedx-bom>=4.0

@@ -1,3 +1,6 @@
+# torch is installed from the CPU-only index first (see the Dockerfile): the
+# service requests no GPU, and the default PyPI wheel brought 15 NVIDIA CUDA
+# packages (several GB) into the image for nothing.
 torch>=2.3
 transformers>=4.44
 sentencepiece>=0.2

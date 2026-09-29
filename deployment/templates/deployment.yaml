@@ -37,15 +37,15 @@ spec:
             sizeLimit: {{ .Values.modelsVolumeSize | default "10Gi" }}
       initContainers:
         - name: fetch-models
-          image: contribute.void42.internal/void42/ci-python:latest
+          # The service image itself: huggingface_hub comes with
+          # transformers, so nothing is installed at pod start (the CI runner
+          # image used to pip-install it here, in prod, on every start).
+          image: contribute.void42.internal/fontem/fontem-linguistics:{{ .Values.version }}
           imagePullPolicy: IfNotPresent
           command:
-            - /bin/bash
+            - /venv/bin/python
             - -c
             - |
-              set -euo pipefail
-              pip install --quiet --no-cache-dir huggingface_hub
-              python - <<'PY'
               import os
               from huggingface_hub import snapshot_download
               targets = [
@@ -85,7 +85,6 @@ spec:
                   with open(marker, "w") as fh:
                       fh.write(f"{repo}@{rev}")
               print("[fetch] done")
-              PY
           env:
             - name: LABSE_REPO
               value: {{ .Values.labseHfRepo | default "sentence-transformers/LaBSE" | quote }}

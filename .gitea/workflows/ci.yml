@@ -13,7 +13,7 @@ jobs:
         env:
           PIP_INDEX_URL: https://nexus.void42.internal/repository/pypi-proxy/simple/
           PIP_TRUSTED_HOST: nexus.void42.internal
-        run: pip install --no-cache-dir -r requirements.txt pytest pylint pytest-cov bandit pip-audit
+        run: pip install --no-cache-dir -r requirements-dev.txt
       - name: Unit + component tests with 90% coverage gate
         run: python3 -m pytest tests/unit tests/component -q --cov=src --cov-report=xml:coverage.xml --cov-config=.coveragerc --cov-fail-under=90 --junitxml=test-results.xml
       - name: Integration tests (testcontainers-postgres)
@@ -35,7 +35,7 @@ jobs:
           PIP_INDEX_URL: https://nexus.void42.internal/repository/pypi-proxy/simple/
           PIP_TRUSTED_HOST: nexus.void42.internal
         run: |
-          pip install --no-cache-dir -r requirements.txt pytest pytest-cov cyclonedx-bom
+          pip install --no-cache-dir -r requirements-dev.txt
           # No `|| true`: a failing suite used to still publish a
           # coverage report and pass the job, so broken tests reached
           # main looking green.
@@ -78,6 +78,9 @@ jobs:
           cosign-key: ${{ secrets.COSIGN_KEY }}
           registry-user: ${{ secrets.REGISTRY_USER }}
           registry-password: ${{ secrets.REGISTRY_PASSWORD }}
+          # Distroless runtime, no pip: fail the build if a shell, package
+          # manager or pip comes back.
+          minimal-enforce: "true"
       - name: Deploy to gitops (prod — singleton)
         env:
           TAG: ${{ steps.img.outputs.tag }}
