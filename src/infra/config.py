@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -43,11 +44,17 @@ class Settings(BaseSettings):
     nebius_timeout_s: float = Field(default=120.0)
     nebius_max_retries: int = Field(default=3)
 
-    # Nebius does not publish prices over the API, so they are configuration.
-    # Spend is charged from the usage block the provider returns, so a wrong
-    # price here skews the accounting but cannot silently uncap it.
-    nebius_price_input_per_mtok: float = Field(default=0.13)
-    nebius_price_output_per_mtok: float = Field(default=0.40)
+    # What Nebius lists for the model under GET /v1/models?verbose=true
+    # (2026-09-29: gemma-3-27b-it $0.10 / $0.30 per million tokens; the
+    # earlier 0.13 / 0.40 over-reported spend by a quarter). Spend is
+    # charged from the usage block the provider returns, so a wrong price
+    # here skews the accounting but cannot silently uncap it.
+    nebius_price_input_per_mtok: float = Field(default=0.10)
+    nebius_price_output_per_mtok: float = Field(default=0.30)
+    # Batch inference is billed at half the base price, rounded up to the
+    # cent (Nebius batch-inference documentation).
+    nebius_batch_price_input_per_mtok: float = Field(default=0.05)
+    nebius_batch_price_output_per_mtok: float = Field(default=0.15)
     nebius_spend_cap_usd_daily: float = Field(
         default=10.0,
         description=(
@@ -60,6 +67,26 @@ class Settings(BaseSettings):
     # a hosted provider at once invites 429s and turns a batch into a retry
     # storm, so items run through a bounded window.
     batch_max_concurrency: int = Field(default=8, ge=1, le=64)
+
+    # Translation jobs (POST /translate/jobs): a caller hands over a whole
+    # set of texts and polls for the result. "provider" runs it as a Nebius
+    # batch (half price, hours not seconds); "realtime" runs it here through
+    # the ordinary translate path; "auto" tries the provider first and runs
+    # it here when the provider will not take a batch.
+    job_mode: Literal["auto", "provider", "realtime"] = Field(default="auto")
+    # Realtime jobs share one window of provider calls across every job in
+    # the pod. Nebius allows gemma-3-27b-it 600 requests and 400k tokens a
+    # minute; one title is ~1k tokens and ~12 s, so 32 in flight is ~160
+    # titles a minute, well inside both.
+    job_max_concurrency: int = Field(default=32, ge=1, le=128)
+    # After the provider refuses a batch, how long "auto" runs jobs here
+    # before offering the provider another one.
+    job_provider_retry_s: float = Field(default=900.0, ge=0)
+    # A realtime job is claimed by one pod, which renews the claim while it
+    # runs; a claim not renewed for this long is taken over (pod restart).
+    job_lease_s: float = Field(default=120.0, ge=10)
+    job_poll_s: float = Field(default=5.0, gt=0)
+    job_retention_days: int = Field(default=14, ge=1)
 
     # Stability
     breaker_failure_threshold: float = Field(

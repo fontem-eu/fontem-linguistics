@@ -10,11 +10,39 @@
 
 # fontem-linguistics
 
-Translation + embedding service. NLLB-200 distilled (translator) + LaBSE (sentence embeddings) running on cluster. Used by the consolidator for cross-language entity matching and by the API for translated authority names.
+Translation + embedding service. Nebius-hosted Gemma (bulk translation and language detection), NLLB-200 distilled (local translator) + LaBSE (sentence embeddings) running on cluster. Used by the consolidator for cross-language entity matching and by the API for translated authority names.
+
+## Translation jobs
+
+For callers that need many translations but not this minute (the translator
+service). `POST /translate/jobs` takes up to 5,000 items
+(`{id, text, source_lang, targets}`) and answers 202 with a `job_id`;
+`GET /translate/jobs/{job_id}` reports `queued` / `running` / `completed` /
+`failed`, with every item's result once completed. An item without
+translations carries `error` and `retryable` (send it again later) or not
+(this text itself failed).
+
+A job runs one of two ways (`JOB_MODE`, or `mode` per request):
+
+- `provider` — a Nebius batch: half the real-time price, outside the
+  real-time rate limits, results within hours. Texts the translation cache
+  already holds are answered from it and never sent.
+- `realtime` — here, through the ordinary translate path, every job in the
+  pod sharing `JOB_MAX_CONCURRENCY` (32) provider calls.
+- `auto` (default) — provider, and realtime while the provider refuses
+  batches (`JOB_PROVIDER_RETRY_S`, 900 s, before offering it another).
+
+Jobs live in the `translation_jobs` table, so a restart loses none: a
+realtime job's claim lapses after `JOB_LEASE_S` and is taken over, and what
+was already translated comes back from the cache. Batch spend is reserved
+against `NEBIUS_SPEND_CAP_USD_DAILY` when the batch is submitted.
 
 ## Deploy
 
-CI auto-deploys to the testing env on every merge to main. Promotion to staging / prod is **manual** — bump the version in `gitops/<env>/<service>.yaml` to land it in a given environment.
+One instance (`linguistics-service` namespace) serves every environment,
+production included. A merge to main bumps its pin in
+`gitops/linguistics-service/fontem-linguistics.yaml`: **merging is a
+production deploy**, with no testing stage in front of it.
 
 ## Convention
 

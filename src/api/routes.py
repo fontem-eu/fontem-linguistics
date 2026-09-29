@@ -20,6 +20,9 @@ from src.api.schemas import (
     DetectResponse,
     EmbedRequest,
     EmbedResponse,
+    JobItemResultModel,
+    JobResponse,
+    JobSubmitRequest,
     LanguageInfo,
     LanguagesResponse,
     ModelInfoResponse,
@@ -30,7 +33,9 @@ from src.api.schemas import (
 from src.domain.catalog import CATALOG
 from src.domain.languages import EU_OFFICIAL_LANGS, LANG_DISPLAY_NAMES
 from src.backends.mistral import MistralError, MistralTransientError
-from src.backends.nebius import NebiusError, NebiusTransientError
+from src.backends.nebius import NebiusBatchRefused, NebiusError, NebiusTransientError
+from src.cache.jobs import JobItem, JobRecord
+from src.services.jobs import JobRefused, TranslationJobs
 from src.domain.models import (
     BackendUnavailable,
     CircuitOpen,
@@ -369,3 +374,69 @@ async def embed_batch(req: EmbedBatchRequest, request: Request) -> EmbedBatchRes
             for r in results
         ],
     )
+
+
+def _jobs(request: Request) -> TranslationJobs:
+    jobs = _services(request).jobs
+    if jobs is None:
+        raise HTTPException(status_code=503, detail="translation jobs are not running")
+    return jobs
+
+
+def _job_response(job: JobRecord) -> JobResponse:
+    return JobResponse(
+        job_id=job.job_id, mode=job.mode, status=job.status, n_items=job.n_items,
+        cost_usd=job.cost_usd, error=job.error, created_at=job.created_at,
+        completed_at=job.completed_at,
+        results=None if job.results is None else [
+            JobItemResultModel(**r.__dict__) for r in job.results],
+    )
+
+
+@router.post(
+    "/translate/jobs",
+    status_code=202,
+    responses={
+        400: {"description": "Empty or duplicate items, or a mode the backend cannot run."},
+        429: {"description": "The provider budget for today is spent."},
+        502: {"description": "The provider failed to take the batch; send it again later."},
+        503: {"description": "Provider batches refused (mode=provider) or backend unavailable."},
+    },
+)
+async def submit_translation_job(req: JobSubmitRequest, request: Request) -> JobResponse:
+    """Accept a set of texts to translate; poll GET /translate/jobs/{job_id}."""
+    items = [JobItem(id=i.id, text=i.text, source_lang=i.source_lang, targets=i.targets)
+             for i in req.items]
+    try:
+        job = await _jobs(request).submit(items, req.backend, req.mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except JobRefused as exc:
+        raise HTTPException(status_code=429, detail=str(exc),
+                            headers={"X-Backend-State": "spend-cap-exceeded"}) from exc
+    except (NebiusBatchRefused, BackendUnavailable) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (NebiusTransientError, NebiusError) as exc:
+        raise HTTPException(status_code=502, detail=f"nebius: {exc}") from exc
+    return _job_response(job)
+
+
+@router.get(
+    "/translate/jobs/{job_id}",
+    responses={
+        404: {"description": "No such job (never submitted, or past its retention)."},
+        502: {"description": "The provider could not be asked; poll again later."},
+        503: {"description": "Translation jobs or the provider backend are not configured."},
+    },
+)
+async def translation_job(job_id: str, request: Request) -> JobResponse:
+    """The job's status; its results once completed."""
+    try:
+        job = await _jobs(request).status(job_id)
+    except BackendUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (NebiusTransientError, NebiusError) as exc:
+        raise HTTPException(status_code=502, detail=f"nebius: {exc}") from exc
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"no job {job_id}")
+    return _job_response(job)

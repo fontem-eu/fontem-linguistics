@@ -6,7 +6,12 @@ import json
 import httpx
 import pytest
 
-from src.backends.nebius import NebiusBackend, NebiusError, NebiusTransientError
+from src.backends.nebius import (
+    NebiusBackend,
+    NebiusBatchRefused,
+    NebiusError,
+    NebiusTransientError,
+)
 from src.backends.openai_chat import (
     build_detect_prompt,
     build_translate_prompt,
@@ -201,3 +206,117 @@ async def test_an_unreadable_detection_is_an_error_for_the_call():
     data = {"choices": [{"message": {"content": "[\"fr\"]"}}]}
     with pytest.raises(NebiusError, match="not a JSON object"):
         parse_detect_response(data, 1, NebiusError)
+
+
+# ── Batch inference ──────────────────────────────────────────────
+
+
+class _BatchApi:
+    """The files and batches endpoints, answering as Nebius does."""
+
+    def __init__(self, create_status: int = 200) -> None:
+        self.create_status = create_status
+        self.uploads: list[bytes] = []
+        self.created: list[dict] = []
+        self.deleted: list[str] = []
+
+    # One return per endpoint it plays, as a router would have.
+    async def __call__(  # pylint: disable=too-many-return-statements
+        self, request: httpx.Request,
+    ) -> httpx.Response:
+        path, method = request.url.path, request.method
+        if method == "POST" and path.endswith("/files"):
+            self.uploads.append(request.content)
+            return httpx.Response(200, json={"id": "file-in", "purpose": "batch"})
+        if method == "POST" and path.endswith("/batches"):
+            if self.create_status != 200:
+                return httpx.Response(self.create_status, json={
+                    "detail": "Creating new batch job is temporarily unavailable"})
+            self.created.append(json.loads(request.content))
+            return httpx.Response(200, json={"id": "batch-1", "status": "validating"})
+        if method == "GET" and path.endswith("/batches/batch-1"):
+            return httpx.Response(200, json={"id": "batch-1", "status": "completed",
+                                             "output_file_id": "file-out"})
+        if method == "GET" and path.endswith("/files/file-out/content"):
+            return httpx.Response(200, text='{"custom_id": "a"}\n\n{"custom_id": "b"}\n')
+        if method == "DELETE":
+            self.deleted.append(path.rsplit("/", 1)[-1])
+            return httpx.Response(200, json={"deleted": True})
+        return httpx.Response(404, json={"detail": "not found"})
+
+
+async def test_a_batch_line_carries_the_same_request_as_a_realtime_call():
+    """Same prompt, model, JSON mode and temperature: a title translated
+    in a batch must read like one translated now."""
+    nebius = _build(_BatchApi())
+    line = nebius.batch_line("item-7", "Roboty budowlane", "pl", TARGETS)
+    assert line == {"custom_id": "item-7", "method": "POST", "url": "/v1/chat/completions",
+                    "body": nebius.translate_payload("Roboty budowlane", "pl", TARGETS)}
+    assert line["body"]["messages"][0]["content"] == build_translate_prompt(
+        "Roboty budowlane", "pl", TARGETS)
+
+
+async def test_submit_batch_uploads_the_lines_then_starts_the_batch():
+    api = _BatchApi()
+    nebius = _build(api)
+    lines = [nebius.batch_line(i, t, "pl", TARGETS) for i, t in (("a", "Łódź"), ("b", "Kraków"))]
+    assert await nebius.submit_batch(lines, {"job_id": "j1"}) == ("batch-1", "file-in")
+    uploaded = api.uploads[0].decode("utf-8")
+    assert '"custom_id": "a"' in uploaded and "Łódź" in uploaded     # unescaped UTF-8
+    assert b'name="purpose"' in api.uploads[0] and b"batch" in api.uploads[0]
+    assert api.created == [{"input_file_id": "file-in", "endpoint": "/v1/chat/completions",
+                            "completion_window": "24h", "metadata": {"job_id": "j1"}}]
+
+
+async def test_a_refused_batch_is_its_own_error_and_leaves_no_file_behind():
+    api = _BatchApi(create_status=403)
+    nebius = _build(api)
+    with pytest.raises(NebiusBatchRefused):
+        await nebius.submit_batch([nebius.batch_line("a", "x", "pl", TARGETS)], {})
+    assert api.deleted == ["file-in"]
+
+
+async def test_a_provider_outage_on_batch_creation_is_transient():
+    nebius = _build(_BatchApi(create_status=503))
+    with pytest.raises(NebiusTransientError):
+        await nebius.submit_batch([nebius.batch_line("a", "x", "pl", TARGETS)], {})
+
+
+async def test_batch_and_result_file_are_read_back():
+    nebius = _build(_BatchApi())
+    batch = await nebius.get_batch("batch-1")
+    assert batch["status"] == "completed"
+    assert await nebius.file_lines(batch["output_file_id"]) == [
+        {"custom_id": "a"}, {"custom_id": "b"}]
+
+
+async def test_a_missing_batch_is_an_error_and_a_network_failure_transient():
+    nebius = _build(_BatchApi())
+    with pytest.raises(NebiusError):
+        await nebius.get_batch("nope")
+
+    async def down(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("unreachable")
+    with pytest.raises(NebiusTransientError):
+        await _build(down).get_batch("batch-1")
+
+
+async def test_deleting_a_file_is_best_effort():
+    async def fails(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+    await _build(fails).delete_file("file-x")      # does not raise
+
+
+async def test_the_batch_reservation_covers_what_a_title_actually_cost():
+    """Measured 2026-09-23: 138 prompt + 830 completion tokens for one
+    title into 23 languages. The reservation must not be below it."""
+    nebius = _build(_BatchApi())
+    actual = nebius.batch_chat_usd({"prompt_tokens": 138, "completion_tokens": 830})
+    assert actual == pytest.approx((138 * 0.05 + 830 * 0.15) / 1_000_000)
+    assert nebius.estimate_batch_usd(100, 23) >= actual
+
+
+async def test_batch_prices_are_half_the_realtime_ones_by_default():
+    nebius = _build(_BatchApi())
+    usage = {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}
+    assert nebius.batch_chat_usd(usage) == pytest.approx(0.20)

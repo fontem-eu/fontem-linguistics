@@ -139,6 +139,10 @@ spec:
               value: {{ .Values.nebiusChatModel | quote }}
             - name: NEBIUS_SPEND_CAP_USD_DAILY
               value: {{ .Values.nebiusSpendCapUsdDaily | quote }}
+            - name: JOB_MODE
+              value: {{ .Values.jobMode | quote }}
+            - name: JOB_MAX_CONCURRENCY
+              value: {{ .Values.jobMaxConcurrency | quote }}
             # HuggingFace Hub token — lifts the anonymous rate limit
             # for NLLB + LaBSE model downloads on first use of the
             # nllb-local / labse-local backends. Without this, a cold

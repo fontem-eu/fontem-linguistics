@@ -16,6 +16,7 @@ in the right language with the right register.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 import httpx
@@ -39,6 +40,20 @@ class NebiusTransientError(Exception):
     """5xx, 429 or a network timeout — retriable by the service."""
 
 
+class NebiusBatchRefused(NebiusError):
+    """Nebius would not create a batch job.
+
+    Seen 2026-09-29 as 403 {"detail": "Creating new batch job is temporarily
+    unavailable"} while uploads and real-time calls worked: the account can
+    lose batch creation on its own. A caller with another way to get the
+    work done should take it rather than fail.
+    """
+
+
+#: Batch states in which the provider is still working.
+BATCH_WORKING = frozenset({"validating", "in_progress", "finalizing", "cancelling"})
+
+
 @dataclass
 class NebiusBackend:  # pylint: disable=too-many-instance-attributes
     """Configuration bag for one hosted chat model; fields map to env vars."""
@@ -51,6 +66,8 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
     price_input_per_mtok: float
     price_output_per_mtok: float
     client: httpx.AsyncClient
+    batch_price_input_per_mtok: float = 0.05
+    batch_price_output_per_mtok: float = 0.15
 
     @classmethod
     def build(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -62,6 +79,8 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         max_retries: int,
         price_input_per_mtok: float,
         price_output_per_mtok: float,
+        batch_price_input_per_mtok: float = 0.05,
+        batch_price_output_per_mtok: float = 0.15,
     ) -> "NebiusBackend":
         client = httpx.AsyncClient(
             base_url=api_url.rstrip("/"),
@@ -77,6 +96,8 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
             price_input_per_mtok=price_input_per_mtok,
             price_output_per_mtok=price_output_per_mtok,
             client=client,
+            batch_price_input_per_mtok=batch_price_input_per_mtok,
+            batch_price_output_per_mtok=batch_price_output_per_mtok,
         )
 
     async def translate(
@@ -94,16 +115,8 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         settle on the real number instead of leaving an estimate standing —
         which is the difference between a budget and a guess.
         """
-        payload = {
-            "model": self.chat_model,
-            "messages": [
-                {"role": "user", "content": build_translate_prompt(text, source_lang, targets)},
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.0,
-        }
         data = await post_with_retries(
-            self.client, "/chat/completions", payload,
+            self.client, "/chat/completions", self.translate_payload(text, source_lang, targets),
             max_retries=self.max_retries,
             transient_cls=NebiusTransientError, error_cls=NebiusError,
         )
@@ -111,6 +124,18 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         cost = self.actual_chat_usd(usage)
         self._record_chat_spend(usage)
         return translations, cost
+
+    def translate_payload(self, text: str, source_lang: str, targets: list[str]) -> dict:
+        """The chat request for one text: the same whether it is sent now or
+        as a line of a batch, so both paths get the same translation."""
+        return {
+            "model": self.chat_model,
+            "messages": [
+                {"role": "user", "content": build_translate_prompt(text, source_lang, targets)},
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.0,
+        }
 
     async def detect_with_cost(self, texts: list[str]) -> tuple[list[str | None], float]:
         """Each text's ISO 639-1 code (None where the model gave none), and
@@ -129,6 +154,68 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         codes, usage = parse_detect_response(data, len(texts), NebiusError)
         self._record_chat_spend(usage)
         return codes, self.actual_chat_usd(usage)
+
+    # ── Batch inference ───────────────────────────────────────────
+
+    def batch_line(self, custom_id: str, text: str, source_lang: str,
+                   targets: list[str]) -> dict:
+        """One request of a batch file, in the OpenAI batch format."""
+        return {"custom_id": custom_id, "method": "POST", "url": "/v1/chat/completions",
+                "body": self.translate_payload(text, source_lang, targets)}
+
+    async def submit_batch(self, lines: list[dict], metadata: dict[str, str]) -> tuple[str, str]:
+        """Upload the requests and start a batch: ``(batch_id, input_file_id)``.
+
+        A refusal to create the batch removes the uploaded file again, so a
+        provider that keeps refusing does not collect our files.
+        """
+        body = "".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines)
+        resp = await self._send("POST", "/files", files={
+            "file": ("requests.jsonl", body.encode("utf-8"), "application/jsonl")},
+            data={"purpose": "batch"})
+        file_id = resp.json()["id"]
+        try:
+            resp = await self._send("POST", "/batches", json={
+                "input_file_id": file_id, "endpoint": "/v1/chat/completions",
+                "completion_window": "24h", "metadata": metadata,
+            })
+        except NebiusError:
+            await self.delete_file(file_id)
+            raise
+        return resp.json()["id"], file_id
+
+    async def get_batch(self, batch_id: str) -> dict:
+        """The batch object: ``status``, ``output_file_id``, ``error_file_id``."""
+        return (await self._send("GET", f"/batches/{batch_id}")).json()
+
+    async def file_lines(self, file_id: str) -> list[dict]:
+        """A result file, one JSON object per line."""
+        text = (await self._send("GET", f"/files/{file_id}/content")).text
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+    async def delete_file(self, file_id: str) -> None:
+        """Best effort: a file left behind costs storage, not correctness."""
+        try:
+            await self._send("DELETE", f"/files/{file_id}")
+        except (NebiusError, NebiusTransientError):
+            pass
+
+    async def _send(self, method: str, path: str, **kwargs) -> httpx.Response:
+        """One call to the files/batches API. 5xx, 429 and network failures
+        are transient; a 403 on creating a batch is the provider refusing
+        batches; any other 4xx is an error."""
+        try:
+            resp = await self.client.request(method, path, **kwargs)
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise NebiusTransientError(f"{method} {path}: {exc}") from exc
+        if resp.status_code >= 500 or resp.status_code == 429:
+            raise NebiusTransientError(
+                f"{method} {path}: status={resp.status_code} body={resp.text[:200]}")
+        if resp.status_code == 403 and path == "/batches":
+            raise NebiusBatchRefused(f"status=403 body={resp.text[:200]}")
+        if resp.status_code >= 400:
+            raise NebiusError(f"{method} {path}: status={resp.status_code} body={resp.text[:200]}")
+        return resp
 
     async def aclose(self) -> None:
         await self.client.aclose()
@@ -167,3 +254,27 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
     def actual_chat_usd(self, usage: dict) -> float:
         """What the last call actually cost, for `SpendCap.finalize`."""
         return price_usd(usage, self.price_input_per_mtok, self.price_output_per_mtok)
+
+    def estimate_batch_usd(self, text_chars: int, n_targets: int) -> float:
+        """Reservation for one batch request, at batch prices.
+
+        Pessimistic, because a batch is reserved whole before any of it runs:
+        the prompt's own ~130 tokens plus the text in, and per target a token
+        for every two characters plus the JSON key around it out. Measured
+        output runs lower (830 tokens for one title into 23 on 2026-09-23;
+        ~500 on average for authority names), Greek and Bulgarian highest.
+        """
+        est_in_tokens = text_chars // 3 + 160
+        est_out_tokens = n_targets * (text_chars // 2 + 10)
+        return (
+            est_in_tokens * self.batch_price_input_per_mtok
+            + est_out_tokens * self.batch_price_output_per_mtok
+        ) / 1_000_000
+
+    def batch_chat_usd(self, usage: dict) -> float:
+        """What one batch request cost: its usage at batch prices."""
+        return price_usd(usage, self.batch_price_input_per_mtok, self.batch_price_output_per_mtok)
+
+    def record_batch_spend(self, usd: float) -> None:
+        """Count a finished batch's cost where every other spend is counted."""
+        LLM_SPEND_USD.labels(provider="nebius", endpoint="batch").inc(usd)

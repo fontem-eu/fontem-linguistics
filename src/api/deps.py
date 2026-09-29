@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.services.embedding import EmbeddingService
+from src.services.jobs import TranslationJobs
 from src.services.translation import TranslationService
 
 
@@ -11,6 +12,7 @@ from src.services.translation import TranslationService
 class Services:
     translation: TranslationService
     embedding: EmbeddingService
+    jobs: TranslationJobs | None = None
 
 
 # Module-level holder: set once in `lifespan`, read by handlers via request.app.state.
