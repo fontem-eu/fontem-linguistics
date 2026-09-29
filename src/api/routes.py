@@ -426,6 +426,7 @@ async def submit_translation_job(req: JobSubmitRequest, request: Request) -> Job
     responses={
         404: {"description": "No such job (never submitted, or past its retention)."},
         502: {"description": "The provider could not be asked; poll again later."},
+        503: {"description": "Translation jobs or the provider backend are not configured."},
     },
 )
 async def translation_job(job_id: str, request: Request) -> JobResponse:

@@ -22,6 +22,12 @@ nebiusApiUrl: "https://api.studio.nebius.com/v1"
 nebiusChatModel: "google/gemma-3-27b-it"
 # Separate from Mistral's cap. Per pod: replicas x cap is the real ceiling.
 nebiusSpendCapUsdDaily: "10.0"
+# Translation jobs (POST /translate/jobs): "auto" = a Nebius batch, run here
+# in real time while Nebius refuses batches. Realtime jobs share this many
+# provider calls; Nebius allows gemma-3-27b-it 600 req / 400k tok a minute,
+# and one title is ~1k tokens and ~12 s.
+jobMode: "auto"
+jobMaxConcurrency: "32"
 spendCapUsdDaily: "50.0"
 breakerFailureThreshold: "0.05"
 breakerWindowS: "60"

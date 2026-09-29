@@ -149,9 +149,9 @@ class TranslationJobs:  # pylint: disable=too-many-instance-attributes
 
     async def _submit_realtime(self, items: list[JobItem],
                                backend: TranslationBackend) -> JobRecord:
-        cap = (self.translation.nebius_spend_cap if backend is TranslationBackend.NEBIUS
-               else self.translation.mistral_spend_cap
-               if backend is TranslationBackend.MISTRAL else None)
+        caps = {TranslationBackend.NEBIUS: self.translation.nebius_spend_cap,
+                TranslationBackend.MISTRAL: self.translation.mistral_spend_cap}
+        cap = caps.get(backend)
         if cap is not None and cap.spent_usd >= cap.daily_cap_usd:
             raise JobRefused(f"daily cap ${cap.daily_cap_usd:.2f} already spent")
         job = await self.store.insert(JobRecord(
@@ -426,5 +426,10 @@ def _retryable(code, error) -> bool:
 
 def _count_items(mode: str, results: list[ItemResult]) -> None:
     for r in results:
-        outcome = "ok" if not r.error else "retryable" if r.retryable else "failed"
+        if not r.error:
+            outcome = "ok"
+        elif r.retryable:
+            outcome = "retryable"
+        else:
+            outcome = "failed"
         TRANSLATION_JOB_ITEMS.labels(mode=mode, outcome=outcome).inc()
