@@ -465,7 +465,7 @@ async def test_a_text_of_nothing_but_names_never_reaches_the_provider():
     api = ProviderApi()
     translation = FakeTranslation(nebius=_nebius(api))
     jobs, _ = _jobs(translation, mode="provider")
-    job = await jobs.submit([JobItem(id="q", text="save2safe", source_lang="en", targets=["de", "fr"])],
-                            NEBIUS)
+    item = JobItem(id="q", text="save2safe", source_lang="en", targets=["de", "fr"])
+    job = await jobs.submit([item], NEBIUS)
     assert job.status == COMPLETED and not api.uploads
     assert job.results[0].translations == {"de": "save2safe", "fr": "save2safe"}
