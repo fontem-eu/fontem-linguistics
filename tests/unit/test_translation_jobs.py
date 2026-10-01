@@ -459,3 +459,13 @@ async def test_provider_mode_needs_nebius_configured():
 async def test_an_unknown_job_is_none():
     jobs, _ = _jobs(FakeTranslation())
     assert await jobs.status("nope") is None
+
+
+async def test_a_text_of_nothing_but_names_never_reaches_the_provider():
+    api = ProviderApi()
+    translation = FakeTranslation(nebius=_nebius(api))
+    jobs, _ = _jobs(translation, mode="provider")
+    job = await jobs.submit([JobItem(id="q", text="save2safe", source_lang="en", targets=["de", "fr"])],
+                            NEBIUS)
+    assert job.status == COMPLETED and not api.uploads
+    assert job.results[0].translations == {"de": "save2safe", "fr": "save2safe"}

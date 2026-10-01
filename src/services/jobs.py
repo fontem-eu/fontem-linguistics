@@ -34,7 +34,7 @@ from src.backends.nebius import (
     NebiusError,
     NebiusTransientError,
 )
-from src.backends.openai_chat import parse_translation_response
+from src.backends.openai_chat import parse_translation_response, untranslatable
 from src.cache.jobs import (
     COMPLETED,
     FAILED,
@@ -194,9 +194,13 @@ class TranslationJobs:  # pylint: disable=too-many-instance-attributes
 
     async def _from_cache(self, items: list[JobItem], backend: TranslationBackend
                           ) -> tuple[list[ItemResult], list[JobItem]]:
-        """(items the cache answers in full, items still to send)."""
+        """(items the cache answers in full, or that are nothing but
+        brand-like names and so their own translation; items still to send)."""
         answered, todo = [], []
         for item in items:
+            if untranslatable(item.text):
+                answered.append(ItemResult(item.id, {t: item.text for t in item.targets}))
+                continue
             cached = await self.translation.cache.get_translations(
                 item.text, cache_source(item.source_lang), item.targets, backend.value)
             if all(t in cached for t in item.targets):

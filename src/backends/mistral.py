@@ -16,8 +16,9 @@ from src.infra.metrics import LLM_SPEND_USD, MISTRAL_SPEND_USD
 class MistralError(Exception):
     """Raised when Mistral returns a non-retriable error or malformed payload."""
 
-    #: Set by parse_translation_response for an answer in the wrong script.
-    wrong_script: bool = False
+    #: Set by parse_translation_response for an answer in the wrong script
+    #: or with a placeholder lost.
+    retry_plainly: bool = False
 
 
 class MistralTransientError(Exception):
