@@ -18,7 +18,7 @@ import re
 
 import httpx
 
-from src.domain.brand_marks import mark_brands
+from src.domain.brand_marks import only_names, protect, restore
 
 #: EU official languages, code -> the name a model will recognise. Spelling
 #: out the name matters for the smaller ones: a model given only `mt` has
@@ -54,11 +54,13 @@ NAMES_INSTRUCTION = (
     "body or thing something is (for example 'Ville de', 'Mairie de', 'Université de'). "
 )
 
-#: The sentence for the names mark_brands() wraps: without the marks the
-#: names sentence alone translated coined names ("QUEST" -> "Suche").
-MARKS_INSTRUCTION = (
-    "Text between angle brackets <...> is such a name: keep it unchanged and write it "
-    "without the brackets. "
+#: The sentence for the placeholders protect() puts where brand-like names
+#: were: without them the names sentence alone translated coined names
+#: ("QUEST" -> "Suche"); asked to keep <marked> names, the model still
+#: translated some and left brackets in a fifth of its answers.
+PLACEHOLDER_INSTRUCTION = (
+    "Placeholders such as {1} stand for names: copy each one unchanged, exactly once, "
+    "into every translation. "
 )
 
 #: Bulgarian and Greek names are transliterated, and the names sentence
@@ -81,13 +83,13 @@ def build_translate_prompt(text: str, source_lang: str, targets: list[str],
     1,392 strings on the first prod run. The wording below held copies to
     the source language alone on the same titles.
 
-    Brand-like tokens in the text are wrapped in <...> (mark_brands) and
-    the prompt says what the brackets mean; parse_translation_response()
-    removes any the model leaves in its answer. ``names=False`` is the plain
-    prompt without either: the fallback for an answer in the wrong script,
-    which it got right for every such text in the 2026-10-01 test.
+    Brand-like tokens leave the text as placeholders (protect) that
+    parse_translation_response() puts back. ``names=False`` is the plain
+    prompt without names guidance or placeholders: the fallback for an
+    answer in the wrong script or with a placeholder lost, which got every
+    such text right in the 2026-10-01 test.
     """
-    marked = mark_brands(text) if names else text
+    protected, placeholders = protect(text) if names else (text, [])
     pretty = ", ".join(f"{code} ({lang_fullname(code)})" for code in targets)
     if source_lang == UNDETERMINED:
         keys = ", ".join(f'"{t}"' for t in ["source_lang", *targets])
@@ -106,14 +108,14 @@ def build_translate_prompt(text: str, source_lang: str, targets: list[str],
     guidance = ""
     if names:
         guidance = NAMES_INSTRUCTION + SCRIPT_INSTRUCTION
-        if marked != text:
-            guidance += MARKS_INSTRUCTION
+        if placeholders:
+            guidance += PLACEHOLDER_INSTRUCTION
     return (
         opening + guidance
         + "Preserve institutional terminology, do not paraphrase. Return strict "
         f"JSON with keys: {keys}. No prose, no explanation.\n"
         f"Target languages: {pretty}.\n"
-        f"Text: {marked}"
+        f"Text: {protected}"
     )
 
 
@@ -122,8 +124,10 @@ _NON_LATIN = re.compile(r"[\u0370-\u03ff\u0400-\u04ff]")
 _NON_LATIN_TARGETS = frozenset({"bg", "el"})
 
 
-def parse_translation_response(
+# The text and prompt variant are what the answer is checked against.
+def parse_translation_response(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     data: dict, targets: list[str], error_cls: type[Exception], source_text: str = "",
+    names: bool = True,
 ) -> tuple[dict[str, str], dict]:
     """Validate a chat completion into ``({lang: text}, usage)``.
 
@@ -132,7 +136,10 @@ def parse_translation_response(
     the graph as a translated record with languages quietly absent. So is a
     Latin-script language written in Cyrillic or Greek when the original has
     no such letters ("Město Пеннес Мирабо" for Czech): the Bulgarian answer
-    bleeding into the others. The <...> marks a model leaves are removed.
+    bleeding into the others. With ``names`` the brand-like spans of
+    ``source_text`` were sent as placeholders: they are put back, and an
+    answer that lost or doubled one is an error. Both errors carry a flag
+    the backend acts on by asking again with the plain prompt.
     """
     try:
         content = data["choices"][0]["message"]["content"]
@@ -143,15 +150,29 @@ def parse_translation_response(
     missing = [t for t in targets if t not in parsed or not isinstance(parsed[t], str)]
     if missing:
         raise error_cls(f"missing/malformed target(s) in response: {missing}")
-    out = {t: parsed[t].replace("<", "").replace(">", "") for t in targets}
+    out = {t: parsed[t] for t in targets}
+    if names and source_text:
+        _, placeholders = protect(source_text)
+        restored = {t: restore(v, placeholders) for t, v in out.items()}
+        broken = [t for t, v in restored.items() if v is None]
+        if broken:
+            exc = error_cls(f"placeholder lost or doubled in target(s): {broken}")
+            exc.retry_plainly = True     # type: ignore[attr-defined]
+            raise exc
+        out = {t: v for t, v in restored.items() if v is not None}
     if not _NON_LATIN.search(source_text):
         wrong = [t for t in targets if t not in _NON_LATIN_TARGETS and _NON_LATIN.search(out[t])]
         if wrong:
             exc = error_cls(f"Cyrillic or Greek letters in Latin-script target(s): {wrong}")
             # Declared on NebiusError and MistralError; the caller asks again.
-            exc.wrong_script = True     # type: ignore[attr-defined]
+            exc.retry_plainly = True     # type: ignore[attr-defined]
             raise exc
     return out, (data.get("usage") or {})
+
+
+def untranslatable(text: str) -> bool:
+    """A text that is nothing but brand-like names: its own translation."""
+    return only_names(text)
 
 
 #: What a detection may answer: a two-letter ISO 639-1 code, or "und".

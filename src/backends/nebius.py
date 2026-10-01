@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import httpx
 
 from src.backends.openai_chat import (
+    untranslatable,
     build_detect_prompt,
     build_translate_prompt,
     parse_detect_response,
@@ -35,9 +36,9 @@ from src.infra.metrics import LLM_SPEND_USD
 class NebiusError(Exception):
     """Non-retriable Nebius failure, or a malformed payload."""
 
-    #: Set by parse_translation_response for an answer in the wrong script,
-    #: which is asked again with the plain prompt.
-    wrong_script: bool = False
+    #: Set by parse_translation_response for an answer in the wrong script
+    #: or with a placeholder lost, which is asked again with the plain prompt.
+    retry_plainly: bool = False
     #: What the failed call was charged, when it was charged.
     cost: float = 0.0
 
@@ -119,14 +120,17 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
 
         The cost comes back rather than being swallowed so the spend cap can
         settle on the real number instead of leaving an estimate standing —
-        which is the difference between a budget and a guess. An answer that
-        writes a Latin-script language in Cyrillic or Greek is asked again
-        with the plain prompt; both calls are charged.
+        which is the difference between a budget and a guess. A text that is
+        nothing but brand-like names is its own translation and costs
+        nothing. An answer in the wrong script, or with a placeholder lost,
+        is asked again with the plain prompt; both calls are charged.
         """
+        if untranslatable(text):
+            return dict.fromkeys(targets, text), 0.0
         try:
             return await self._translate_once(text, source_lang, targets, names=True)
         except NebiusError as exc:
-            if not exc.wrong_script:
+            if not exc.retry_plainly:
                 raise
             first_cost = exc.cost
         translations, cost = await self._translate_once(text, source_lang, targets, names=False)
@@ -142,7 +146,8 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         )
         self._record_chat_spend(data.get("usage") or {})
         try:
-            translations, usage = parse_translation_response(data, targets, NebiusError, text)
+            translations, usage = parse_translation_response(
+                data, targets, NebiusError, text, names)
         except NebiusError as exc:
             exc.cost = self.actual_chat_usd(data.get("usage") or {})
             raise

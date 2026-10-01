@@ -33,10 +33,10 @@ UNDETERMINED_CACHE_KEY = f"{UNDETERMINED}#2"
 
 #: The translation prompt's revision, part of every cache key: a cached
 #: translation is reused only while the prompt that made it is the one in
-#: use. "names-1" (2026-10-01): translate everything but proper names, keep
-#: marked brand-like tokens; before it, most authority names came back as
-#: untranslated copies.
-PROMPT_REVISION = "names-1"
+#: use. "names-2" (2026-10-01): translate everything but proper names,
+#: brand-like tokens sent as placeholders; before "names-1", most authority
+#: names came back as untranslated copies.
+PROMPT_REVISION = "names-2"
 
 
 def cache_source(source_lang: str) -> str:
