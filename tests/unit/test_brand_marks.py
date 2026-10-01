@@ -44,3 +44,12 @@ def test_a_two_word_all_caps_text_of_common_words_is_translated():
 def test_common_words_come_from_any_eu_language():
     assert is_common_word("Phase") and is_common_word("Mairie") and is_common_word("STRASSE")
     assert not is_common_word("OKANTIS") and not is_common_word("CPAM")
+
+
+@pytest.mark.parametrize("word, camel", [
+    ("OptiNERG", True), ("BASgas", True), ("GoDigital", True), ("iPhone", True),
+    ("Paris", False), ("CPAM", False), ("Saint-Martin", False), ("ABc", False),
+])
+def test_camel_humps(word, camel):
+    from src.domain.brand_marks import _camel  # pylint: disable=import-outside-toplevel
+    assert _camel(word) is camel

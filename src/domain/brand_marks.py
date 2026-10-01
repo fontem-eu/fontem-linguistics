@@ -32,8 +32,10 @@ _WORDFREQ_LANGS = ("bg", "cs", "da", "de", "el", "en", "es", "fi", "fr", "hu", "
 _COMMON_ZIPF = 3.0
 
 _TOKEN = re.compile(r"[^\s/,;:()\[\]«»\"“”‘’'–—]+")
-_ROMAN = re.compile(r"^(?=[MDCLXVI])M*(C[MD]|D?C{0,3})(X[CL]|L?X{0,3})(I[XV]|V?I{0,3})$")
-_CAMEL = re.compile(r"[a-z][A-Z]|[A-Z]{2,}[a-z]{2,}")
+_DIGITS = (("", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"),
+           ("", "X", "XX", "XXX", "XL", "L", "LX", "LXX", "LXXX", "XC"))
+#: Roman numerals 1-99, as phase and volume numbers are written ("Phase IV").
+_ROMAN = frozenset(_DIGITS[1][n // 10] + _DIGITS[0][n % 10] for n in range(1, 100))
 _DOTTED = re.compile(r"(?:[A-Za-z]{1,3}\.){2,}[A-Za-z]{0,3}\.?")
 _ORDINAL = re.compile(r"\d+(?:st|nd|rd|th|e|er|ème)")
 _LEGAL_FORMS = frozenset({
@@ -41,6 +43,14 @@ _LEGAL_FORMS = frozenset({
     "e.V.", "AöR", "UAB", "a.s.", "s.r.o.", "Kft.", "Zrt.", "Oy", "AB", "ApS", "A/S", "BV",
     "NV", "SAS", "SARL",
 })
+
+
+def _camel(word: str) -> bool:
+    """A lower-case letter followed by a capital (OptiNERG), or two capitals
+    followed by two lower-case letters (BASgas). Read from the word's case
+    shape ('u', 'l', other), no regex."""
+    shape = "".join("u" if c.isupper() else "l" if c.islower() else "." for c in word)
+    return "lu" in shape or "uull" in shape
 
 
 @lru_cache(maxsize=65536)
@@ -52,7 +62,7 @@ def is_common_word(word: str) -> bool:
 
 def _brand_like(word: str, upper_text: bool) -> bool:
     letters = [ch for ch in word if ch.isalpha()]
-    if not letters or (word.isupper() and _ROMAN.match(word)):
+    if not letters or word in _ROMAN:
         return False
     alnum = any(ch.isdigit() for ch in word) and len(letters) >= 2 and not _ORDINAL.fullmatch(word)
     dotted = _DOTTED.fullmatch(word) is not None
@@ -61,7 +71,7 @@ def _brand_like(word: str, upper_text: bool) -> bool:
     if upper_text:
         # All capitals carry no signal: only what no language uses as a word.
         return alnum or dotted or legal or (acronym and len(letters) <= 6)
-    return bool(_CAMEL.search(word)) or alnum or dotted or legal or acronym
+    return _camel(word) or alnum or dotted or legal or acronym
 
 
 def brand_spans(text: str) -> list[tuple[int, int]]:

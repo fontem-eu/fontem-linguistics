@@ -103,8 +103,11 @@ def build_translate_prompt(text: str, source_lang: str, targets: list[str],
             "Translate the following text from "
             f"{lang_fullname(source_lang)} into the target languages. "
         )
-    guidance = (NAMES_INSTRUCTION + SCRIPT_INSTRUCTION
-                + (MARKS_INSTRUCTION if marked != text else "")) if names else ""
+    guidance = ""
+    if names:
+        guidance = NAMES_INSTRUCTION + SCRIPT_INSTRUCTION
+        if marked != text:
+            guidance += MARKS_INSTRUCTION
     return (
         opening + guidance
         + "Preserve institutional terminology, do not paraphrase. Return strict "
