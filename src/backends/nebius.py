@@ -126,7 +126,7 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         is asked again with the plain prompt; both calls are charged.
         """
         if untranslatable(text):
-            return {t: text for t in targets}, 0.0
+            return dict.fromkeys(targets, text), 0.0
         try:
             return await self._translate_once(text, source_lang, targets, names=True)
         except NebiusError as exc:

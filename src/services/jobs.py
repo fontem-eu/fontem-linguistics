@@ -199,7 +199,7 @@ class TranslationJobs:  # pylint: disable=too-many-instance-attributes
         answered, todo = [], []
         for item in items:
             if untranslatable(item.text):
-                answered.append(ItemResult(item.id, {t: item.text for t in item.targets}))
+                answered.append(ItemResult(item.id, dict.fromkeys(item.targets, item.text)))
                 continue
             cached = await self.translation.cache.get_translations(
                 item.text, cache_source(item.source_lang), item.targets, backend.value)
