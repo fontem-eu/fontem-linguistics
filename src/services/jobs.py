@@ -407,7 +407,8 @@ def _line_result(line: dict, by_id: dict[str, JobItem],
         return ItemResult(item.id, error=f"provider status={code}: {detail}"[:300],
                           retryable=_retryable(code, error))
     try:
-        translations, usage = parse_translation_response(body, item.targets, NebiusError)
+        translations, usage = parse_translation_response(body, item.targets, NebiusError,
+                                                         item.text)
     except NebiusError as exc:
         return ItemResult(item.id, error=_describe(exc),
                           cost_usd=nebius.batch_chat_usd(body.get("usage") or {}))
