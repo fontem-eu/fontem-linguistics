@@ -16,6 +16,9 @@ from src.infra.metrics import LLM_SPEND_USD, MISTRAL_SPEND_USD
 class MistralError(Exception):
     """Raised when Mistral returns a non-retriable error or malformed payload."""
 
+    #: Set by parse_translation_response for an answer in the wrong script.
+    wrong_script: bool = False
+
 
 class MistralTransientError(Exception):
     """Raised on 5xx, 429, or network timeouts — retriable by the service."""
@@ -95,7 +98,7 @@ class MistralBackend:  # pylint: disable=too-many-instance-attributes
             "temperature": 0.0,
         }
         data = await self._post_with_retries("/chat/completions", payload)
-        translations, usage = parse_translation_response(data, targets, MistralError)
+        translations, usage = parse_translation_response(data, targets, MistralError, text)
         self._record_chat_spend(usage)
         return translations
 

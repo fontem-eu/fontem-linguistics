@@ -18,6 +18,8 @@ import re
 
 import httpx
 
+from src.domain.brand_marks import mark_brands
+
 #: EU official languages, code -> the name a model will recognise. Spelling
 #: out the name matters for the smaller ones: a model given only `mt` has
 #: been known to answer in Malay rather than Maltese.
@@ -42,7 +44,34 @@ def lang_fullname(code: str) -> str:
 UNDETERMINED = "und"
 
 
-def build_translate_prompt(text: str, source_lang: str, targets: list[str]) -> str:
+#: Told nothing about names, the model left more than half of French and
+#: German authority names untranslated, copied verbatim into every language
+#: ("Ville de Dugny" for "City of Dugny"; 2026-10-01, 526 names and titles:
+#: 29% of texts untranslated, 1.9% with this sentence).
+NAMES_INSTRUCTION = (
+    "Keep proper names of places, people, companies, brands and projects as they are "
+    "written, but translate every other word, including words that say what kind of "
+    "body or thing something is (for example 'Ville de', 'Mairie de', 'Université de'). "
+)
+
+#: The sentence for the names mark_brands() wraps: without the marks the
+#: names sentence alone translated coined names ("QUEST" -> "Suche").
+MARKS_INSTRUCTION = (
+    "Text between angle brackets <...> is such a name: keep it unchanged and write it "
+    "without the brackets. "
+)
+
+#: Bulgarian and Greek names are transliterated, and the names sentence
+#: alone let that bleed into other languages; this sentence halves it
+#: (10 texts of 526 to 5). What still bleeds is caught on parsing.
+SCRIPT_INSTRUCTION = (
+    "Write Bulgarian in Cyrillic and Greek in Greek letters; write every other language "
+    "in Latin letters. "
+)
+
+
+def build_translate_prompt(text: str, source_lang: str, targets: list[str],
+                           names: bool = True) -> str:
     """One prompt, one JSON object back, keyed by language code.
 
     With ``source_lang="und"`` the caller does not know the language, so the
@@ -51,7 +80,14 @@ def build_translate_prompt(text: str, source_lang: str, targets: list[str]) -> s
     text unchanged") made Gemma return the source for EVERY target: 1,127 of
     1,392 strings on the first prod run. The wording below held copies to
     the source language alone on the same titles.
+
+    Brand-like tokens in the text are wrapped in <...> (mark_brands) and
+    the prompt says what the brackets mean; parse_translation_response()
+    removes any the model leaves in its answer. ``names=False`` is the plain
+    prompt without either: the fallback for an answer in the wrong script,
+    which it got right for every such text in the 2026-10-01 test.
     """
+    marked = mark_brands(text) if names else text
     pretty = ", ".join(f"{code} ({lang_fullname(code)})" for code in targets)
     if source_lang == UNDETERMINED:
         keys = ", ".join(f'"{t}"' for t in ["source_lang", *targets])
@@ -67,23 +103,36 @@ def build_translate_prompt(text: str, source_lang: str, targets: list[str]) -> s
             "Translate the following text from "
             f"{lang_fullname(source_lang)} into the target languages. "
         )
+    guidance = ""
+    if names:
+        guidance = NAMES_INSTRUCTION + SCRIPT_INSTRUCTION
+        if marked != text:
+            guidance += MARKS_INSTRUCTION
     return (
-        opening +
-        "Preserve institutional terminology, do not paraphrase. Return strict "
+        opening + guidance
+        + "Preserve institutional terminology, do not paraphrase. Return strict "
         f"JSON with keys: {keys}. No prose, no explanation.\n"
         f"Target languages: {pretty}.\n"
-        f"Text: {text}"
+        f"Text: {marked}"
     )
 
 
+#: Letters of the two non-Latin scripts among the EU languages.
+_NON_LATIN = re.compile(r"[\u0370-\u03ff\u0400-\u04ff]")
+_NON_LATIN_TARGETS = frozenset({"bg", "el"})
+
+
 def parse_translation_response(
-    data: dict, targets: list[str], error_cls: type[Exception],
+    data: dict, targets: list[str], error_cls: type[Exception], source_text: str = "",
 ) -> tuple[dict[str, str], dict]:
     """Validate a chat completion into ``({lang: text}, usage)``.
 
     A response missing a target is an error, not a partial result: the caller
     reserved budget for the whole set, and a silent gap would be written to
-    the graph as a translated record with languages quietly absent.
+    the graph as a translated record with languages quietly absent. So is a
+    Latin-script language written in Cyrillic or Greek when the original has
+    no such letters ("Město Пеннес Мирабо" for Czech): the Bulgarian answer
+    bleeding into the others. The <...> marks a model leaves are removed.
     """
     try:
         content = data["choices"][0]["message"]["content"]
@@ -94,7 +143,15 @@ def parse_translation_response(
     missing = [t for t in targets if t not in parsed or not isinstance(parsed[t], str)]
     if missing:
         raise error_cls(f"missing/malformed target(s) in response: {missing}")
-    return {t: parsed[t] for t in targets}, (data.get("usage") or {})
+    out = {t: parsed[t].replace("<", "").replace(">", "") for t in targets}
+    if not _NON_LATIN.search(source_text):
+        wrong = [t for t in targets if t not in _NON_LATIN_TARGETS and _NON_LATIN.search(out[t])]
+        if wrong:
+            exc = error_cls(f"Cyrillic or Greek letters in Latin-script target(s): {wrong}")
+            # Declared on NebiusError and MistralError; the caller asks again.
+            exc.wrong_script = True     # type: ignore[attr-defined]
+            raise exc
+    return out, (data.get("usage") or {})
 
 
 #: What a detection may answer: a two-letter ISO 639-1 code, or "und".
