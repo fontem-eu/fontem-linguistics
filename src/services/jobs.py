@@ -34,7 +34,7 @@ from src.backends.nebius import (
     NebiusError,
     NebiusTransientError,
 )
-from src.backends.openai_chat import parse_translation_response, untranslatable
+from src.backends.openai_chat import parse_translation_response
 from src.cache.jobs import (
     COMPLETED,
     FAILED,
@@ -194,13 +194,9 @@ class TranslationJobs:  # pylint: disable=too-many-instance-attributes
 
     async def _from_cache(self, items: list[JobItem], backend: TranslationBackend
                           ) -> tuple[list[ItemResult], list[JobItem]]:
-        """(items the cache answers in full, or that are nothing but
-        brand-like names and so their own translation; items still to send)."""
+        """(items the cache answers in full, items still to send)."""
         answered, todo = [], []
         for item in items:
-            if untranslatable(item.text):
-                answered.append(ItemResult(item.id, dict.fromkeys(item.targets, item.text)))
-                continue
             cached = await self.translation.cache.get_translations(
                 item.text, cache_source(item.source_lang), item.targets, backend.value)
             if all(t in cached for t in item.targets):
@@ -411,8 +407,7 @@ def _line_result(line: dict, by_id: dict[str, JobItem],
         return ItemResult(item.id, error=f"provider status={code}: {detail}"[:300],
                           retryable=_retryable(code, error))
     try:
-        translations, usage = parse_translation_response(body, item.targets, NebiusError,
-                                                         item.text)
+        translations, usage = parse_translation_response(body, item.targets, NebiusError)
     except NebiusError as exc:
         return ItemResult(item.id, error=_describe(exc),
                           cost_usd=nebius.batch_chat_usd(body.get("usage") or {}))

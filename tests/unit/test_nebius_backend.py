@@ -13,13 +13,9 @@ from src.backends.nebius import (
     NebiusTransientError,
 )
 from src.backends.openai_chat import (
-    NAMES_INSTRUCTION,
-    PLACEHOLDER_INSTRUCTION,
-    SCRIPT_INSTRUCTION,
     build_detect_prompt,
     build_translate_prompt,
     parse_detect_response,
-    parse_translation_response,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -164,103 +160,14 @@ async def test_an_undetermined_source_asks_the_model_to_look():
     assert "from und" not in seen["prompt"]
 
 
-async def test_the_plain_prompt_reads_as_before():
-    """names=False is the fallback for an answer in the wrong script: the
-    prompt as it was before the names guidance, which never mixed scripts."""
-    assert build_translate_prompt("Travaux", "fr", ["de", "en"], names=False) == (
+def test_a_known_source_prompt_is_unchanged():
+    """Only the undetermined wording moved; the known-source prompt, whose
+    output is already cached and correct, reads exactly as before."""
+    assert build_translate_prompt("Travaux", "fr", ["de", "en"]) == (
         "Translate the following text from French into the target languages. "
         "Preserve institutional terminology, do not paraphrase. Return strict "
         'JSON with keys: "de", "en". No prose, no explanation.\n'
         "Target languages: de (German), en (English).\nText: Travaux")
-
-
-async def test_the_prompt_asks_to_translate_everything_but_names():
-    prompt = build_translate_prompt("Ville de Dugny", "fr", ["de", "en"])
-    assert NAMES_INSTRUCTION in prompt and SCRIPT_INSTRUCTION in prompt
-    assert PLACEHOLDER_INSTRUCTION not in prompt and prompt.endswith("Text: Ville de Dugny")
-
-
-async def test_brand_like_tokens_go_as_placeholders():
-    prompt = build_translate_prompt("Projekt save2safe der CPAM", "de", ["en"])
-    assert PLACEHOLDER_INSTRUCTION in prompt
-    assert prompt.endswith("Text: Projekt {1} der {2}") and "save2safe" not in prompt
-
-
-def _answer(translations: dict) -> dict:
-    return {"choices": [{"message": {"content": json.dumps(translations)}}], "usage": {}}
-
-
-async def test_placeholders_are_put_back():
-    got, _ = parse_translation_response(_answer({"en": "{2} project {1}"}), ["en"],
-                                        NebiusError, "Projekt save2safe der CPAM")
-    assert got == {"en": "CPAM project save2safe"}
-
-
-@pytest.mark.parametrize("answer", [{"en": "Project"}, {"en": "Project {1} {1}"}])
-async def test_a_placeholder_lost_or_doubled_is_asked_again_plainly(answer):
-    with pytest.raises(NebiusError) as err:
-        parse_translation_response(_answer(answer), ["en"], NebiusError, "Projekt save2safe")
-    assert err.value.retry_plainly
-
-
-async def test_the_plain_prompts_answer_is_taken_as_it_is():
-    got, _ = parse_translation_response(_answer({"en": "Project save2safe"}), ["en"],
-                                        NebiusError, "Projekt save2safe", names=False)
-    assert got == {"en": "Project save2safe"}
-
-
-async def test_a_latin_language_in_cyrillic_is_an_error_marked_as_such():
-    with pytest.raises(NebiusError) as err:
-        parse_translation_response(_answer({"cs": "Město Пеннес Мирабо", "bg": "Град Пен"}),
-                                   ["cs", "bg"], NebiusError, "VILLE DES PENNES MIRABEAU")
-    assert err.value.retry_plainly
-
-
-@pytest.mark.parametrize("answer, source, expected", [
-    ({"bg": "Град Дюни", "el": "Πόλη Ντυνί", "en": "City of Dugny"}, "Ville de Dugny", None),
-    # The original has Cyrillic letters itself.
-    ({"en": "Delivery for {1}"}, "Доставка за ГДГП", {"en": "Delivery for ГДГП"}),
-])
-async def test_cyrillic_and_greek_where_they_belong_are_fine(answer, source, expected):
-    got, _ = parse_translation_response(_answer(answer), list(answer), NebiusError, source)
-    assert got == (expected or answer)
-
-
-async def test_an_answer_in_the_wrong_script_is_asked_again_plainly():
-    prompts = []
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        prompt = json.loads(request.content)["messages"][0]["content"]
-        prompts.append(prompt)
-        if len(prompts) == 1:
-            return _completion({"cs": "Město Пеннес", "de": "Stadt Pennes"},
-                               {"prompt_tokens": 100, "completion_tokens": 100})
-        return _completion({"cs": "Město Pennes", "de": "Stadt Pennes"},
-                           {"prompt_tokens": 100, "completion_tokens": 100})
-
-    got, cost = await _build(handler).translate_with_cost("VILLE DES PENNES", "fr", ["cs", "de"])
-    assert got == {"cs": "Město Pennes", "de": "Stadt Pennes"}
-    assert NAMES_INSTRUCTION in prompts[0] and NAMES_INSTRUCTION not in prompts[1]
-    assert cost == pytest.approx(2 * (100 * 0.13 + 100 * 0.40) / 1e6)    # both calls paid
-
-
-async def test_a_text_of_nothing_but_names_is_its_own_translation():
-    async def handler(_request: httpx.Request) -> httpx.Response:
-        raise AssertionError("no call for a text that is only a brand")
-    got, cost = await _build(handler).translate_with_cost("save2safe", "en", ["de", "fr"])
-    assert got == {"de": "save2safe", "fr": "save2safe"} and cost == 0.0
-
-
-async def test_any_other_malformed_answer_is_not_asked_again():
-    calls = []
-
-    async def handler(_request: httpx.Request) -> httpx.Response:
-        calls.append(1)
-        return _completion({"cs": "Město"})                     # de missing
-
-    with pytest.raises(NebiusError):
-        await _build(handler).translate_with_cost("Ville", "fr", ["cs", "de"])
-    assert len(calls) == 1
 
 
 # ── language detection ──────────────────────────────────────────────
