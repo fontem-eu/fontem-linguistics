@@ -14,12 +14,7 @@ from src.domain.models import (
 from src.backends.nebius import NebiusTransientError
 from src.infra.circuit_breaker import CircuitBreaker
 from src.infra.spend_cap import SpendCap
-from src.services.translation import (
-    PROMPT_REVISION,
-    UNDETERMINED_CACHE_KEY,
-    TranslationService,
-    cache_source,
-)
+from src.services.translation import TranslationService, UNDETERMINED_CACHE_KEY, cache_source
 
 
 pytestmark = pytest.mark.asyncio
@@ -93,7 +88,7 @@ def _mk(cache=None, mistral=None, nllb=None) -> TranslationService:
 
 async def test_full_cache_hit_skips_backend():
     cache = FakeCache()
-    cache.translations[("hi", cache_source("en"), "fr", "mistral")] = "salut"
+    cache.translations[("hi", "en", "fr", "mistral")] = "salut"
     mistral = FakeMistral()
     svc = _mk(cache, mistral)
 
@@ -107,7 +102,7 @@ async def test_full_cache_hit_skips_backend():
 
 async def test_partial_cache_only_fetches_missing():
     cache = FakeCache()
-    cache.translations[("hi", cache_source("en"), "fr", "mistral")] = "salut"
+    cache.translations[("hi", "en", "fr", "mistral")] = "salut"
     # en and de not cached
     mistral = FakeMistral(translations={"en": "hi", "de": "hallo"})
     svc = _mk(cache, mistral)
@@ -118,7 +113,7 @@ async def test_partial_cache_only_fetches_missing():
     assert result.fully_cached is False
     assert mistral.last_targets == ["en", "de"]      # only missing targets
     # put_calls must only have en+de, not fr (already cached)
-    assert cache.put_calls == [("hi", cache_source("en"), "mistral", {"en": "hi", "de": "hallo"})]
+    assert cache.put_calls == [("hi", "en", "mistral", {"en": "hi", "de": "hallo"})]
 
 
 async def test_full_miss_calls_backend_and_writes_all():
@@ -336,7 +331,7 @@ async def test_the_result_reports_what_the_call_cost():
 
 async def test_a_cache_hit_costs_nothing():
     cache = FakeCache()
-    cache.translations[("Roboty", cache_source("pl"), "mt", "nebius")] = "Xogħol"
+    cache.translations[("Roboty", "pl", "mt", "nebius")] = "Xogħol"
     nebius = FakeNebius()
     svc = _mk_nebius(nebius, cache=cache)
     result = await svc.translate("Roboty", "pl", ["mt"], TranslationBackend.NEBIUS)
@@ -369,25 +364,21 @@ async def test_copies_cached_by_the_old_undetermined_prompt_are_never_served():
 
     assert nebius.call_count == 1
     assert result.translations == {"de": f"de:{title}", "pt": f"pt:{title}"}
-    assert (title, cache_source("und"), "de", "nebius") in cache.translations
-    assert cache_source("und").startswith(UNDETERMINED_CACHE_KEY)
+    assert (title, UNDETERMINED_CACHE_KEY, "de", "nebius") in cache.translations
 
 
-async def test_a_cached_translation_is_reused_only_under_the_prompt_that_made_it():
-    """Translations cached before the names guidance were mostly copies of
-    authority names; they are not served again, and new ones are cached
-    under the current prompt revision."""
+async def test_a_known_source_keeps_its_cache_key():
+    """Only the undetermined path moved: known-source translations already
+    cached stay cached, and are not paid for again."""
     cache = FakeCache()
-    await cache.put_translations("Roboty", "pl", "nebius", {"de": "Roboty"})
+    await cache.put_translations("Roboty", "pl", "nebius", {"de": "Bauarbeiten"})
     nebius = FakeNebius()
     svc = _mk_nebius(nebius, cache=cache)
 
-    first = await svc.translate("Roboty", "pl", ["de"], TranslationBackend.NEBIUS)
-    again = await svc.translate("Roboty", "pl", ["de"], TranslationBackend.NEBIUS)
+    result = await svc.translate("Roboty", "pl", ["de"], TranslationBackend.NEBIUS)
 
-    assert nebius.call_count == 1 and first.translations == again.translations
-    assert cache_source("pl") == f"pl|{PROMPT_REVISION}"
-    assert ("Roboty", cache_source("pl"), "de", "nebius") in cache.translations
+    assert nebius.call_count == 0 and result.translations == {"de": "Bauarbeiten"}
+    assert cache_source("pl") == "pl"
 
 
 # ── language detection ────────────────────────────────────────────

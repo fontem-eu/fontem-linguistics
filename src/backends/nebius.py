@@ -22,7 +22,6 @@ from dataclasses import dataclass
 import httpx
 
 from src.backends.openai_chat import (
-    untranslatable,
     build_detect_prompt,
     build_translate_prompt,
     parse_detect_response,
@@ -35,12 +34,6 @@ from src.infra.metrics import LLM_SPEND_USD
 
 class NebiusError(Exception):
     """Non-retriable Nebius failure, or a malformed payload."""
-
-    #: Set by parse_translation_response for an answer in the wrong script
-    #: or with a placeholder lost, which is asked again with the plain prompt.
-    retry_plainly: bool = False
-    #: What the failed call was charged, when it was charged.
-    cost: float = 0.0
 
 
 class NebiusTransientError(Exception):
@@ -120,48 +113,25 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
 
         The cost comes back rather than being swallowed so the spend cap can
         settle on the real number instead of leaving an estimate standing —
-        which is the difference between a budget and a guess. A text that is
-        nothing but brand-like names is its own translation and costs
-        nothing. An answer in the wrong script, or with a placeholder lost,
-        is asked again with the plain prompt; both calls are charged.
+        which is the difference between a budget and a guess.
         """
-        if untranslatable(text):
-            return dict.fromkeys(targets, text), 0.0
-        try:
-            return await self._translate_once(text, source_lang, targets, names=True)
-        except NebiusError as exc:
-            if not exc.retry_plainly:
-                raise
-            first_cost = exc.cost
-        translations, cost = await self._translate_once(text, source_lang, targets, names=False)
-        return translations, cost + first_cost
-
-    async def _translate_once(self, text: str, source_lang: str, targets: list[str],
-                              *, names: bool) -> tuple[dict[str, str], float]:
         data = await post_with_retries(
-            self.client, "/chat/completions",
-            self.translate_payload(text, source_lang, targets, names=names),
+            self.client, "/chat/completions", self.translate_payload(text, source_lang, targets),
             max_retries=self.max_retries,
             transient_cls=NebiusTransientError, error_cls=NebiusError,
         )
-        self._record_chat_spend(data.get("usage") or {})
-        try:
-            translations, usage = parse_translation_response(
-                data, targets, NebiusError, text, names)
-        except NebiusError as exc:
-            exc.cost = self.actual_chat_usd(data.get("usage") or {})
-            raise
-        return translations, self.actual_chat_usd(usage)
+        translations, usage = parse_translation_response(data, targets, NebiusError)
+        cost = self.actual_chat_usd(usage)
+        self._record_chat_spend(usage)
+        return translations, cost
 
-    def translate_payload(self, text: str, source_lang: str, targets: list[str],
-                          names: bool = True) -> dict:
+    def translate_payload(self, text: str, source_lang: str, targets: list[str]) -> dict:
         """The chat request for one text: the same whether it is sent now or
         as a line of a batch, so both paths get the same translation."""
         return {
             "model": self.chat_model,
             "messages": [
-                {"role": "user",
-                 "content": build_translate_prompt(text, source_lang, targets, names)},
+                {"role": "user", "content": build_translate_prompt(text, source_lang, targets)},
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.0,

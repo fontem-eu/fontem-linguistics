@@ -27,7 +27,6 @@ from src.domain.models import (
 )
 from src.infra.spend_cap import SpendCap
 from src.services.jobs import JobRefused, TranslationJobs
-from src.services.translation import cache_source
 
 pytestmark = pytest.mark.asyncio
 
@@ -329,7 +328,7 @@ async def test_a_provider_job_sends_only_what_the_cache_cannot_answer():
     output, errors = _provider_output()
     api = ProviderApi(state="in_progress", output=output, errors=errors)
     translation = FakeTranslation(nebius=_nebius(api))
-    translation.cache.rows[("a", cache_source("pl"), "nebius")] = {"en": "A-en", "de": "A-de"}
+    translation.cache.rows[("a", "pl", "nebius")] = {"en": "A-en", "de": "A-de"}
     jobs, _ = _jobs(translation, mode="provider")
     job = await jobs.submit(_items("a", "b", "c", "d", "e", "f", "g"), NEBIUS)
     assert (job.mode, job.status) == ("provider", QUEUED)
@@ -352,8 +351,7 @@ async def test_a_provider_job_sends_only_what_the_cache_cannot_answer():
     batch_cost = ((100 * 0.05 + 200 * 0.15) + (100 * 0.05 + 100 * 0.15)) / 1_000_000
     assert done.cost_usd == pytest.approx(batch_cost)
     assert translation.nebius_spend_cap.spent_usd == pytest.approx(batch_cost)
-    assert translation.cache.puts == [
-        ("b", cache_source("pl"), "nebius", {"en": "B-en", "de": "B-de"})]
+    assert translation.cache.puts == [("b", "pl", "nebius", {"en": "B-en", "de": "B-de"})]
     again = await jobs.status(job.job_id)                   # final: the provider is not asked
     assert again.status == COMPLETED and api.creates == 1
 
@@ -361,7 +359,7 @@ async def test_a_provider_job_sends_only_what_the_cache_cannot_answer():
 async def test_a_job_the_cache_answers_in_full_never_reaches_the_provider():
     api = ProviderApi()
     translation = FakeTranslation(nebius=_nebius(api))
-    translation.cache.rows[("a", cache_source("pl"), "nebius")] = {"en": "A-en", "de": "A-de"}
+    translation.cache.rows[("a", "pl", "nebius")] = {"en": "A-en", "de": "A-de"}
     jobs, _ = _jobs(translation, mode="provider")
     job = await jobs.submit(_items("a"), NEBIUS)
     assert job.status == COMPLETED and job.results[0].translations["de"] == "A-de"
@@ -459,13 +457,3 @@ async def test_provider_mode_needs_nebius_configured():
 async def test_an_unknown_job_is_none():
     jobs, _ = _jobs(FakeTranslation())
     assert await jobs.status("nope") is None
-
-
-async def test_a_text_of_nothing_but_names_never_reaches_the_provider():
-    api = ProviderApi()
-    translation = FakeTranslation(nebius=_nebius(api))
-    jobs, _ = _jobs(translation, mode="provider")
-    item = JobItem(id="q", text="save2safe", source_lang="en", targets=["de", "fr"])
-    job = await jobs.submit([item], NEBIUS)
-    assert job.status == COMPLETED and not api.uploads
-    assert job.results[0].translations == {"de": "save2safe", "fr": "save2safe"}
