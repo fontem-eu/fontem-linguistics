@@ -38,3 +38,17 @@ def test_local_quantize_int8_overridable(monkeypatch):
     monkeypatch.setenv("LOCAL_QUANTIZE_INT8", "true")
     s = Settings(_env_file=None)
     assert s.local_quantize_int8 is True
+
+
+
+def test_the_nebius_model_comes_with_its_extra_parameters(monkeypatch):
+    from src.infra.config import Settings  # pylint: disable=import-outside-toplevel
+    for name in ("NEBIUS_CHAT_MODEL", "NEBIUS_CHAT_EXTRA"):
+        monkeypatch.delenv(name, raising=False)
+    s = Settings(_env_file=None, database_url="postgresql://x")
+    assert s.nebius_chat_model == "deepseek-ai/DeepSeek-V4-Flash-0731"
+    assert s.nebius_chat_extra == {"reasoning_effort": "none"}
+    monkeypatch.setenv("NEBIUS_CHAT_MODEL", "google/gemma-3-27b-it")
+    monkeypatch.setenv("NEBIUS_CHAT_EXTRA", "{}")
+    s = Settings(_env_file=None, database_url="postgresql://x")
+    assert s.nebius_chat_model == "google/gemma-3-27b-it" and s.nebius_chat_extra == {}

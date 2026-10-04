@@ -17,7 +17,7 @@ in the right language with the right register.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -68,6 +68,8 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
     client: httpx.AsyncClient
     batch_price_input_per_mtok: float = 0.05
     batch_price_output_per_mtok: float = 0.15
+    #: Request parameters the model needs beyond the prompt (reasoning_effort).
+    chat_extra: dict = field(default_factory=dict)
 
     @classmethod
     def build(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -81,6 +83,7 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         price_output_per_mtok: float,
         batch_price_input_per_mtok: float = 0.05,
         batch_price_output_per_mtok: float = 0.15,
+        chat_extra: dict | None = None,
     ) -> "NebiusBackend":
         client = httpx.AsyncClient(
             base_url=api_url.rstrip("/"),
@@ -98,6 +101,7 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
             client=client,
             batch_price_input_per_mtok=batch_price_input_per_mtok,
             batch_price_output_per_mtok=batch_price_output_per_mtok,
+            chat_extra=dict(chat_extra or {}),
         )
 
     async def translate(
@@ -128,26 +132,23 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
     def translate_payload(self, text: str, source_lang: str, targets: list[str]) -> dict:
         """The chat request for one text: the same whether it is sent now or
         as a line of a batch, so both paths get the same translation."""
+        return self._chat_payload(build_translate_prompt(text, source_lang, targets))
+
+    def _chat_payload(self, prompt: str) -> dict:
+        """A chat request for the configured model, with its extra parameters."""
         return {
             "model": self.chat_model,
-            "messages": [
-                {"role": "user", "content": build_translate_prompt(text, source_lang, targets)},
-            ],
+            "messages": [{"role": "user", "content": prompt}],
             "response_format": {"type": "json_object"},
             "temperature": 0.0,
+            **self.chat_extra,
         }
 
     async def detect_with_cost(self, texts: list[str]) -> tuple[list[str | None], float]:
         """Each text's ISO 639-1 code (None where the model gave none), and
         what the call was charged. One call for the whole list."""
-        payload = {
-            "model": self.chat_model,
-            "messages": [{"role": "user", "content": build_detect_prompt(texts)}],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.0,
-        }
         data = await post_with_retries(
-            self.client, "/chat/completions", payload,
+            self.client, "/chat/completions", self._chat_payload(build_detect_prompt(texts)),
             max_retries=self.max_retries,
             transient_cls=NebiusTransientError, error_cls=NebiusError,
         )

@@ -236,6 +236,7 @@ class FakeNebius:
     cost_usd: float = 0.00035
     raises: Exception | None = None
     call_count: int = 0
+    chat_model: str = "google/gemma-3-27b-it"
 
     def estimate_chat_usd(self, text_chars, n_targets):
         return 0.0001
@@ -416,3 +417,30 @@ async def test_detection_is_nebius_only_and_needs_it_configured():
         await _mk_nebius(None).detect(["Roboty"], TranslationBackend.NEBIUS)
     with pytest.raises(ValueError, match="non-empty"):
         await _mk_nebius(FakeNebius()).detect(["Roboty", " "], TranslationBackend.NEBIUS)
+
+
+
+async def test_the_cache_key_names_the_model_except_the_legacy_one():
+    nebius = FakeNebius()
+    svc = _mk_nebius(nebius)
+    nebius.chat_model = "google/gemma-3-27b-it"
+    assert svc.cache_backend(TranslationBackend.NEBIUS) == "nebius"
+    nebius.chat_model = "deepseek-ai/DeepSeek-V4-Flash-0731"
+    assert (svc.cache_backend(TranslationBackend.NEBIUS)
+            == "nebius:deepseek-ai/DeepSeek-V4-Flash-0731")
+    assert svc.cache_backend(TranslationBackend.MISTRAL) == "mistral"
+
+
+async def test_another_models_cached_translation_is_not_served():
+    """After the switch from gemma, a title gemma translated is translated
+    again by the new model, and cached under its key."""
+    cache = FakeCache()
+    await cache.put_translations("Roboty", "pl", "nebius", {"de": "gemma: Arbeiten"})
+    nebius = FakeNebius()
+    nebius.chat_model = "deepseek-ai/DeepSeek-V4-Flash-0731"
+    svc = _mk_nebius(nebius, cache=cache)
+
+    result = await svc.translate("Roboty", "pl", ["de"], TranslationBackend.NEBIUS)
+
+    assert nebius.call_count == 1 and result.translations["de"] != "gemma: Arbeiten"
+    assert ("Roboty", "pl", "de", "nebius:deepseek-ai/DeepSeek-V4-Flash-0731") in cache.translations

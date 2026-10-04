@@ -136,6 +136,16 @@ spec:
               value: {{ .Values.nebiusApiUrl | quote }}
             - name: NEBIUS_CHAT_MODEL
               value: {{ .Values.nebiusChatModel | quote }}
+            - name: NEBIUS_CHAT_EXTRA
+              value: {{ .Values.nebiusChatExtra | quote }}
+            - name: NEBIUS_PRICE_INPUT_PER_MTOK
+              value: {{ .Values.nebiusPriceInputPerMtok | quote }}
+            - name: NEBIUS_PRICE_OUTPUT_PER_MTOK
+              value: {{ .Values.nebiusPriceOutputPerMtok | quote }}
+            - name: NEBIUS_BATCH_PRICE_INPUT_PER_MTOK
+              value: {{ .Values.nebiusBatchPriceInputPerMtok | quote }}
+            - name: NEBIUS_BATCH_PRICE_OUTPUT_PER_MTOK
+              value: {{ .Values.nebiusBatchPriceOutputPerMtok | quote }}
             - name: NEBIUS_SPEND_CAP_USD_DAILY
               value: {{ .Values.nebiusSpendCapUsdDaily | quote }}
             - name: JOB_MODE

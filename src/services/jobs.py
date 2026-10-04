@@ -198,7 +198,8 @@ class TranslationJobs:  # pylint: disable=too-many-instance-attributes
         answered, todo = [], []
         for item in items:
             cached = await self.translation.cache.get_translations(
-                item.text, cache_source(item.source_lang), item.targets, backend.value)
+                item.text, cache_source(item.source_lang), item.targets,
+                self.translation.cache_backend(backend))
             if all(t in cached for t in item.targets):
                 answered.append(ItemResult(item.id, {t: cached[t] for t in item.targets}))
             else:
@@ -246,7 +247,9 @@ class TranslationJobs:  # pylint: disable=too-many-instance-attributes
             if r.translations and r.id not in prefilled:
                 item = by_id[r.id]
                 await self.translation.cache.put_translations(
-                    item.text, cache_source(item.source_lang), job.backend, r.translations)
+                    item.text, cache_source(item.source_lang),
+                    self.translation.cache_backend(TranslationBackend(job.backend)),
+                    r.translations)
         cost = sum(r.cost_usd for r in ordered)
         nebius.record_batch_spend(cost)
         await self._settle(job, cost)
