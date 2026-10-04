@@ -6,7 +6,6 @@ backend target in component tests so the real Mistral API is never hit.
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from dataclasses import dataclass, field
 
@@ -24,14 +23,12 @@ class StubState:
     calls: list[tuple[str, dict]] = field(default_factory=list)
 
 
-_KEYS_LINE_RE = re.compile(r"keys:\s*([^\n]+)")
-_ISO_RE = re.compile(r'"([a-z]{2,3})"')
+_TAG_RE = re.compile(r"<([a-z]{2,3})>\.\.\.</\1>")
 
 
 def _default_chat_response(prompt_text: str) -> dict:
-    m = _KEYS_LINE_RE.search(prompt_text)
-    keys = _ISO_RE.findall(m.group(1)) if m else []
-    content = json.dumps({k: f"[{k}]stub" for k in keys})
+    keys = _TAG_RE.findall(prompt_text)
+    content = "\n".join(f"<{k}>[{k}]stub</{k}>" for k in keys)
     return {
         "choices": [{"message": {"content": content}}],
         "usage": {"prompt_tokens": 50, "completion_tokens": 20},

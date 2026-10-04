@@ -134,21 +134,28 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         as a line of a batch, so both paths get the same translation."""
         return self._chat_payload(build_translate_prompt(text, source_lang, targets))
 
-    def _chat_payload(self, prompt: str) -> dict:
-        """A chat request for the configured model, with its extra parameters."""
-        return {
+    def _chat_payload(self, prompt: str, json_mode: bool = False) -> dict:
+        """A chat request for the configured model, with its extra parameters.
+
+        JSON mode only where the answer is codes: a translation comes back
+        tagged, as plain text (see ``build_translate_prompt``).
+        """
+        payload = {
             "model": self.chat_model,
             "messages": [{"role": "user", "content": prompt}],
-            "response_format": {"type": "json_object"},
             "temperature": 0.0,
             **self.chat_extra,
         }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        return payload
 
     async def detect_with_cost(self, texts: list[str]) -> tuple[list[str | None], float]:
         """Each text's ISO 639-1 code (None where the model gave none), and
         what the call was charged. One call for the whole list."""
         data = await post_with_retries(
-            self.client, "/chat/completions", self._chat_payload(build_detect_prompt(texts)),
+            self.client, "/chat/completions",
+            self._chat_payload(build_detect_prompt(texts), json_mode=True),
             max_retries=self.max_retries,
             transient_cls=NebiusTransientError, error_cls=NebiusError,
         )

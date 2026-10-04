@@ -144,7 +144,8 @@ class FakeTranslation:
 
 
 def _completion(translations: dict, prompt: int = 100, completion: int = 200) -> dict:
-    return {"choices": [{"message": {"content": json.dumps(translations)}}],
+    tagged = "\n".join(f"<{lang}>{text}</{lang}>" for lang, text in translations.items())
+    return {"choices": [{"message": {"content": tagged}}],
             "usage": {"prompt_tokens": prompt, "completion_tokens": completion}}
 
 

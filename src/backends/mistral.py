@@ -91,7 +91,6 @@ class MistralBackend:  # pylint: disable=too-many-instance-attributes
             "messages": [
                 {"role": "user", "content": build_translate_prompt(text, source_lang, targets)},
             ],
-            "response_format": {"type": "json_object"},
             "temperature": 0.0,
         }
         data = await self._post_with_retries("/chat/completions", payload)

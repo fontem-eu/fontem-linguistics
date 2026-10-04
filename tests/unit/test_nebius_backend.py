@@ -16,6 +16,7 @@ from src.backends.openai_chat import (
     build_detect_prompt,
     build_translate_prompt,
     parse_detect_response,
+    parse_translation_response,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -42,8 +43,21 @@ def _build(handler, max_retries: int = 2) -> NebiusBackend:
 
 
 def _completion(payload: dict, usage: dict | None = None) -> httpx.Response:
+    """A JSON answer, as detection gets."""
     return httpx.Response(200, json={
         "choices": [{"message": {"content": json.dumps(payload)}}],
+        "usage": usage or {"prompt_tokens": 138, "completion_tokens": 830},
+    })
+
+
+def _tagged(translations: dict[str, str]) -> str:
+    return "\n".join(f"<{lang}>{text}</{lang}>" for lang, text in translations.items())
+
+
+def _translation(translations: dict[str, str], usage: dict | None = None) -> httpx.Response:
+    """A tagged answer, as translation gets."""
+    return httpx.Response(200, json={
+        "choices": [{"message": {"content": _tagged(translations)}, "finish_reason": "stop"}],
         "usage": usage or {"prompt_tokens": 138, "completion_tokens": 830},
     })
 
@@ -53,9 +67,9 @@ async def test_translate_returns_every_requested_target():
         assert request.url.path.endswith("/chat/completions")
         body = json.loads(request.content)
         assert body["model"] == "google/gemma-3-27b-it"
-        assert body["response_format"] == {"type": "json_object"}
+        assert "response_format" not in body, "JSON mode makes the model escape free text"
         assert body["temperature"] == 0.0
-        return _completion({"mt": "Xogħol", "ga": "Obair", "et": "Töö"})
+        return _translation({"mt": "Xogħol", "ga": "Obair", "et": "Töö"})
 
     got = await _build(handler).translate("Roboty budowlane", "pl", TARGETS)
     assert got == {"mt": "Xogħol", "ga": "Obair", "et": "Töö"}
@@ -68,7 +82,7 @@ async def test_the_prompt_names_the_language_not_just_the_code():
 
     async def handler(request: httpx.Request) -> httpx.Response:
         seen["prompt"] = json.loads(request.content)["messages"][0]["content"]
-        return _completion({t: "x" for t in TARGETS})
+        return _translation({t: "x" for t in TARGETS})
 
     await _build(handler).translate("Roboty budowlane", "pl", TARGETS)
     prompt = seen["prompt"]
@@ -81,7 +95,7 @@ async def test_a_missing_target_is_an_error_not_a_partial_result():
     """Writing a record as translated with languages quietly absent is worse
     than failing: nothing downstream would ever come back for them."""
     async def handler(_request: httpx.Request) -> httpx.Response:
-        return _completion({"mt": "Xogħol", "ga": "Obair"})      # et missing
+        return _translation({"mt": "Xogħol", "ga": "Obair"})      # et missing
 
     with pytest.raises(NebiusError, match="missing/malformed"):
         await _build(handler).translate("Roboty budowlane", "pl", TARGETS)
@@ -92,7 +106,7 @@ async def test_cost_comes_from_the_providers_usage_block():
     At $0.13/$0.40 per Mtok that is $0.00035 — the number the spend cap
     settles on, rather than the pre-call estimate."""
     async def handler(_request: httpx.Request) -> httpx.Response:
-        return _completion({t: "x" for t in TARGETS})
+        return _translation({t: "x" for t in TARGETS})
 
     backend = _build(handler)
     _got, cost = await backend.translate_with_cost("Roboty budowlane", "pl", TARGETS)
@@ -108,7 +122,7 @@ async def test_5xx_is_retried_and_4xx_is_not():
         calls["n"] += 1
         if calls["n"] == 1:
             return httpx.Response(503, text="upstream busy")
-        return _completion({t: "x" for t in TARGETS})
+        return _translation({t: "x" for t in TARGETS})
 
     assert await _build(flaky).translate("t", "pl", TARGETS)
     assert calls["n"] == 2
@@ -132,15 +146,26 @@ async def test_exhausted_retries_surface_as_transient():
         await _build(always_503, max_retries=1).translate("t", "pl", TARGETS)
 
 
-async def test_malformed_json_is_rejected():
+async def test_an_untagged_answer_is_rejected():
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={
-            "choices": [{"message": {"content": "not json at all"}}],
+            "choices": [{"message": {"content": '{"mt": "x", "ga": "x", "et": "x"}'}}],
             "usage": {},
         })
 
-    with pytest.raises(NebiusError, match="malformed"):
+    with pytest.raises(NebiusError, match="missing/malformed"):
         await _build(handler).translate("t", "pl", TARGETS)
+
+
+async def test_a_completion_without_text_is_malformed():
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [{"message": {"content": None}}]})
+
+    with pytest.raises(NebiusError, match="malformed chat response"):
+        await _build(handler).translate("t", "pl", TARGETS)
+
+    with pytest.raises(NebiusError, match="malformed chat response"):
+        parse_translation_response({"choices": []}, TARGETS, NebiusError)
 
 
 async def test_an_undetermined_source_asks_the_model_to_look():
@@ -151,23 +176,67 @@ async def test_an_undetermined_source_asks_the_model_to_look():
 
     async def handler(request: httpx.Request) -> httpx.Response:
         seen["prompt"] = json.loads(request.content)["messages"][0]["content"]
-        return _completion({"en": "Wind turbine procurement", "mt": "x"})
+        return _translation({"en": "Wind turbine procurement", "mt": "x"})
 
     await _build(handler).translate("Anskaffelse av vindturbiner", "und", ["en", "mt"])
     assert "may equal the original text only for the language" in seen["prompt"]
-    assert '"source_lang"' in seen["prompt"]
+    assert "<source_lang>" in seen["prompt"]
     assert "return the text unchanged" not in seen["prompt"]
     assert "from und" not in seen["prompt"]
 
 
-def test_a_known_source_prompt_is_unchanged():
-    """Only the undetermined wording moved; the known-source prompt, whose
-    output is already cached and correct, reads exactly as before."""
+def test_a_known_source_prompt_asks_for_tags_and_nothing_else_moved():
+    """The wording that was judged on adequacy stays; only the answer's
+    shape changed, from JSON keys to one tagged line per language."""
     assert build_translate_prompt("Travaux", "fr", ["de", "en"]) == (
         "Translate the following text from French into the target languages. "
-        "Preserve institutional terminology, do not paraphrase. Return strict "
-        'JSON with keys: "de", "en". No prose, no explanation.\n'
+        "Preserve institutional terminology, do not paraphrase. Write each "
+        "translation on a line of its own between its language's tags: "
+        "<de>...</de>, <en>...</en>. Keep quotation marks and all other "
+        "punctuation exactly as written; nothing is escaped. No prose, no explanation.\n"
         "Target languages: de (German), en (English).\nText: Travaux")
+
+
+# ── the tagged answer ───────────────────────────────────────────────
+
+
+def _content(text: str, finish_reason: str = "stop") -> dict:
+    return {"choices": [{"message": {"content": text}, "finish_reason": finish_reason}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2}}
+
+
+async def test_quotes_inside_a_name_survive_as_written():
+    """The names that broke JSON on 2026-10-04: an ASCII quote closing a
+    typographic one, a quote at the very end, an apostrophe."""
+    answers = {
+        "en": 'Emergency Situations Inspectorate „Dealul Spirii" Bucharest',
+        "de": "Bereitstellung des Anpassungsprogramms “Settle in Estonia”",
+        "it": 'UNIVERSITA\' DEGLI STUDI "G. d\'Annunzio" Chieti/Pescara',
+    }
+    got, usage = parse_translation_response(_content(_tagged(answers)), list(answers), NebiusError)
+    assert got == answers
+    assert usage == {"prompt_tokens": 1, "completion_tokens": 2}
+
+
+async def test_each_target_is_read_on_its_own():
+    """Prose around the tags, a translation broken over lines, a target
+    answered twice: each language is taken from its own first pair."""
+    content = ("Here are the translations:\n<de>Bauarbeiten</de>\n"
+               "<en>Construction\nworks</en>\n<de>Bauleistungen</de>\nDone.")
+    got, _usage = parse_translation_response(_content(content), ["de", "en"], NebiusError)
+    assert got == {"de": "Bauarbeiten", "en": "Construction\nworks"}
+
+
+async def test_an_empty_or_unclosed_target_is_missing_and_named():
+    content = "<de>  </de>\n<en>Construction works"
+    with pytest.raises(NebiusError, match=r"\['de', 'en'\]"):
+        parse_translation_response(_content(content), ["de", "en"], NebiusError)
+
+
+async def test_an_answer_cut_off_at_the_token_limit_says_so():
+    content = "<de>Bauarbeiten</de>\n<en>Construction wo"
+    with pytest.raises(NebiusError, match=r"cut off at the token limit\): \['en'\]"):
+        parse_translation_response(_content(content, "length"), ["de", "en"], NebiusError)
 
 
 # ── language detection ──────────────────────────────────────────────
@@ -246,7 +315,7 @@ class _BatchApi:
 
 
 async def test_a_batch_line_carries_the_same_request_as_a_realtime_call():
-    """Same prompt, model, JSON mode and temperature: a title translated
+    """Same prompt, model, answer format and temperature: a title translated
     in a batch must read like one translated now."""
     nebius = _build(_BatchApi())
     line = nebius.batch_line("item-7", "Roboty budowlane", "pl", TARGETS)
@@ -333,7 +402,7 @@ async def test_the_models_extra_parameters_go_with_every_request():
         seen.append(body)
         if "Identify the language" in body["messages"][0]["content"]:
             return _completion({"0": "pl"})
-        return _completion({t: "x" for t in TARGETS})
+        return _translation({t: "x" for t in TARGETS})
 
     nebius = _build(handler)
     nebius.chat_extra = {"reasoning_effort": "none"}
@@ -342,4 +411,6 @@ async def test_the_models_extra_parameters_go_with_every_request():
     line = nebius.batch_line("1", "Roboty", "pl", TARGETS)
     assert [b["reasoning_effort"] for b in seen] == ["none", "none"]
     assert line["body"]["reasoning_effort"] == "none"
-    assert all(b["response_format"] == {"type": "json_object"} for b in seen)
+    # JSON mode for the codes of a detection only; a translation is free text.
+    assert ["response_format" in b for b in seen] == [False, True]
+    assert "response_format" not in line["body"]

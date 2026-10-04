@@ -43,7 +43,14 @@ UNDETERMINED = "und"
 
 
 def build_translate_prompt(text: str, source_lang: str, targets: list[str]) -> str:
-    """One prompt, one JSON object back, keyed by language code.
+    """One prompt, one ``<code>translation</code>`` line back per target.
+
+    Tags rather than JSON, because a translation is free text and JSON makes
+    the model escape it. Names quote their namesakes — „Dealul Spirii",
+    "Puławy", “Settle in Estonia” — and DeepSeek-V4-Flash, asked for JSON,
+    closed the string at the inner quote and ran on for thousands of
+    characters: 23 of 49,000 names failed all three attempts on 2026-10-04.
+    Between tags a quote is just a character.
 
     With ``source_lang="und"`` the caller does not know the language, so the
     model is asked for every target and for the ``source_lang`` it found. The
@@ -54,26 +61,43 @@ def build_translate_prompt(text: str, source_lang: str, targets: list[str]) -> s
     """
     pretty = ", ".join(f"{code} ({lang_fullname(code)})" for code in targets)
     if source_lang == UNDETERMINED:
-        keys = ", ".join(f'"{t}"' for t in ["source_lang", *targets])
+        tags = ", ".join(f"<{t}>...</{t}>" for t in ["source_lang", *targets])
         opening = (
             "Translate the following text into every target language below. "
-            "Write each value in its own target language; a value may equal the "
-            "original text only for the language the text is already written in. "
-            'Also give "source_lang": the ISO 639-1 code of the text\'s language. '
+            "Write each translation in its own target language; a translation may "
+            "equal the original text only for the language the text is already "
+            "written in. Also give <source_lang>: the ISO 639-1 code of the text's "
+            "language. "
         )
     else:
-        keys = ", ".join(f'"{t}"' for t in targets)
+        tags = ", ".join(f"<{t}>...</{t}>" for t in targets)
         opening = (
             "Translate the following text from "
             f"{lang_fullname(source_lang)} into the target languages. "
         )
     return (
         opening +
-        "Preserve institutional terminology, do not paraphrase. Return strict "
-        f"JSON with keys: {keys}. No prose, no explanation.\n"
+        "Preserve institutional terminology, do not paraphrase. Write each "
+        f"translation on a line of its own between its language's tags: {tags}. "
+        "Keep quotation marks and all other punctuation exactly as written; "
+        "nothing is escaped. No prose, no explanation.\n"
         f"Target languages: {pretty}.\n"
         f"Text: {text}"
     )
+
+
+def _tagged(content: str, tag: str) -> str | None:
+    """The text between the first ``<tag>`` and its ``</tag>``, stripped;
+    None when the pair is absent or holds nothing."""
+    opening, closing = f"<{tag}>", f"</{tag}>"
+    start = content.find(opening)
+    if start < 0:
+        return None
+    start += len(opening)
+    end = content.find(closing, start)
+    if end < 0:
+        return None
+    return content[start:end].strip() or None
 
 
 def parse_translation_response(
@@ -83,18 +107,31 @@ def parse_translation_response(
 
     A response missing a target is an error, not a partial result: the caller
     reserved budget for the whole set, and a silent gap would be written to
-    the graph as a translated record with languages quietly absent.
+    the graph as a translated record with languages quietly absent. Each
+    target is read on its own, so a stray line before or after the tags
+    costs nothing, and one target gone wrong is named rather than taking an
+    unreadable document down with it.
     """
     try:
-        content = data["choices"][0]["message"]["content"]
-        parsed = json.loads(content)
-    except (KeyError, IndexError, json.JSONDecodeError) as exc:
+        choice = data["choices"][0]
+        content = choice["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
         raise error_cls(f"malformed chat response: {exc}") from exc
+    if not isinstance(content, str):
+        raise error_cls("malformed chat response: no text content")
 
-    missing = [t for t in targets if t not in parsed or not isinstance(parsed[t], str)]
+    translations: dict[str, str] = {}
+    missing: list[str] = []
+    for target in targets:
+        value = _tagged(content, target)
+        if value is None:
+            missing.append(target)
+        else:
+            translations[target] = value
     if missing:
-        raise error_cls(f"missing/malformed target(s) in response: {missing}")
-    return {t: parsed[t] for t in targets}, (data.get("usage") or {})
+        cut = " (cut off at the token limit)" if choice.get("finish_reason") == "length" else ""
+        raise error_cls(f"missing/malformed target(s) in response{cut}: {missing}")
+    return translations, (data.get("usage") or {})
 
 
 #: What a detection may answer: a two-letter ISO 639-1 code, or "und".

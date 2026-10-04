@@ -16,6 +16,10 @@ from src.backends.mistral import (
 pytestmark = pytest.mark.asyncio
 
 
+def _tagged(translations: dict[str, str]) -> str:
+    return "\n".join(f"<{lang}>{text}</{lang}>" for lang, text in translations.items())
+
+
 def _build(handler) -> MistralBackend:
     transport = httpx.MockTransport(handler)
     client = httpx.AsyncClient(
@@ -37,15 +41,15 @@ def _build(handler) -> MistralBackend:
     )
 
 
-async def test_translate_parses_json_mode_response():
+async def test_translate_parses_the_tagged_response():
     def handler(req: httpx.Request) -> httpx.Response:
         assert req.url.path == "/v1/chat/completions"
         body = json.loads(req.content)
-        assert body["response_format"] == {"type": "json_object"}
+        assert "response_format" not in body
         return httpx.Response(
             200,
             json={
-                "choices": [{"message": {"content": json.dumps({
+                "choices": [{"message": {"content": _tagged({
                     "en": "Ministry of Defence",
                     "fr": "Ministère de la Défense",
                 })}}],
@@ -64,7 +68,7 @@ async def test_translate_raises_on_missing_target():
         return httpx.Response(
             200,
             json={
-                "choices": [{"message": {"content": json.dumps({"en": "Hello"})}}],
+                "choices": [{"message": {"content": _tagged({"en": "Hello"})}}],
                 "usage": {"prompt_tokens": 10, "completion_tokens": 5},
             },
         )
@@ -75,7 +79,7 @@ async def test_translate_raises_on_missing_target():
     await backend.aclose()
 
 
-async def test_translate_raises_on_malformed_json_content():
+async def test_translate_raises_on_an_untagged_answer():
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -86,7 +90,7 @@ async def test_translate_raises_on_malformed_json_content():
         )
 
     backend = _build(handler)
-    with pytest.raises(MistralError, match="malformed chat response"):
+    with pytest.raises(MistralError, match="missing/malformed"):
         await backend.translate("hi", "en", ["fr"])
     await backend.aclose()
 
@@ -101,7 +105,7 @@ async def test_translate_retries_on_5xx_then_succeeds():
         return httpx.Response(
             200,
             json={
-                "choices": [{"message": {"content": json.dumps({"en": "ok"})}}],
+                "choices": [{"message": {"content": _tagged({"en": "ok"})}}],
                 "usage": {"prompt_tokens": 5, "completion_tokens": 2},
             },
         )
@@ -147,7 +151,7 @@ async def test_translate_retries_on_429():
         return httpx.Response(
             200,
             json={
-                "choices": [{"message": {"content": json.dumps({"fr": "salut"})}}],
+                "choices": [{"message": {"content": _tagged({"fr": "salut"})}}],
                 "usage": {"prompt_tokens": 5, "completion_tokens": 2},
             },
         )
