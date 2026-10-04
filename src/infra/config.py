@@ -33,28 +33,33 @@ class Settings(BaseSettings):
     nebius_api_url: str = Field(default="https://api.studio.nebius.com/v1")
     nebius_api_key: str | None = Field(default=None)
     nebius_chat_model: str = Field(
-        default="google/gemma-3-27b-it",
+        default="deepseek-ai/DeepSeek-V4-Flash-0731",
         description=(
-            "Measured 2026-09-23 on a real contract title into 23 languages: "
-            "138 prompt + 830 completion tokens, 12.2s, all 23 present and "
-            "correct in Maltese, Irish, Latvian and Estonian. "
-            "Qwen3-30B-A3B timed out at 180s on the same request."
+            "Chosen 2026-10-03 over gemma-3-27b-it on 224 prod names and titles, "
+            "judged blind by three models: first with all three (89 vs 80 with the "
+            "neutral judge), half the bad translations, complete JSON every time, "
+            "language detection at least as good; about the same price."
         ),
     )
+    # Request parameters the model needs beyond the prompt, merged into every
+    # chat request (translation, detection, batch lines). DeepSeek-V4-Flash
+    # reasons by default: it spent its whole token budget thinking and cut
+    # the translation off, unless told reasoning_effort "none".
+    nebius_chat_extra: dict = Field(default_factory=lambda: {"reasoning_effort": "none"})
     nebius_timeout_s: float = Field(default=120.0)
     nebius_max_retries: int = Field(default=3)
 
     # What Nebius lists for the model under GET /v1/models?verbose=true
-    # (2026-09-29: gemma-3-27b-it $0.10 / $0.30 per million tokens; the
-    # earlier 0.13 / 0.40 over-reported spend by a quarter). Spend is
-    # charged from the usage block the provider returns, so a wrong price
-    # here skews the accounting but cannot silently uncap it.
-    nebius_price_input_per_mtok: float = Field(default=0.10)
-    nebius_price_output_per_mtok: float = Field(default=0.30)
+    # (2026-10-03: DeepSeek-V4-Flash-0731 $0.14 / $0.28 per million tokens;
+    # gemma-3-27b-it was $0.10 / $0.30). Spend is charged from the usage
+    # block the provider returns, so a wrong price here skews the accounting
+    # but cannot silently uncap it. Change them with the model.
+    nebius_price_input_per_mtok: float = Field(default=0.14)
+    nebius_price_output_per_mtok: float = Field(default=0.28)
     # Batch inference is billed at half the base price, rounded up to the
     # cent (Nebius batch-inference documentation).
-    nebius_batch_price_input_per_mtok: float = Field(default=0.05)
-    nebius_batch_price_output_per_mtok: float = Field(default=0.15)
+    nebius_batch_price_input_per_mtok: float = Field(default=0.07)
+    nebius_batch_price_output_per_mtok: float = Field(default=0.14)
     nebius_spend_cap_usd_daily: float = Field(
         default=10.0,
         description=(

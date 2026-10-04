@@ -320,3 +320,26 @@ async def test_batch_prices_are_half_the_realtime_ones_by_default():
     nebius = _build(_BatchApi())
     usage = {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}
     assert nebius.batch_chat_usd(usage) == pytest.approx(0.20)
+
+
+
+async def test_the_models_extra_parameters_go_with_every_request():
+    """DeepSeek-V4-Flash reasons unless told not to; the parameter must
+    reach translation, detection and batch lines alike."""
+    seen = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body)
+        if "Identify the language" in body["messages"][0]["content"]:
+            return _completion({"0": "pl"})
+        return _completion({t: "x" for t in TARGETS})
+
+    nebius = _build(handler)
+    nebius.chat_extra = {"reasoning_effort": "none"}
+    await nebius.translate("Roboty", "pl", TARGETS)
+    await nebius.detect_with_cost(["Roboty"])
+    line = nebius.batch_line("1", "Roboty", "pl", TARGETS)
+    assert [b["reasoning_effort"] for b in seen] == ["none", "none"]
+    assert line["body"]["reasoning_effort"] == "none"
+    assert all(b["response_format"] == {"type": "json_object"} for b in seen)

@@ -17,9 +17,18 @@ mistralEmbedModel: "mistral-embed-2312"
 # secret by a VaultStaticSecret in gitops (infra/linguistics-service.yaml).
 nebiusSecretName: "fontem-linguistics-nebius-credentials"
 nebiusApiUrl: "https://api.studio.nebius.com/v1"
-# Measured 2026-09-23: 23/23 languages on a real contract title, 12.2s,
-# 138 + 830 tokens. Qwen3-30B-A3B timed out at 180s on the same request.
-nebiusChatModel: "google/gemma-3-27b-it"
+# Chosen 2026-10-03 over gemma-3-27b-it: 224 prod names and titles judged blind
+# by three models put DeepSeek-V4-Flash first with all three, half the bad
+# translations, at about the same price. It reasons by default and then cuts
+# its answer off, so it is told reasoning_effort "none" (nebiusChatExtra, merged
+# into every request). Prices are what GET /v1/models lists for it; batch is
+# half. Change all of these together.
+nebiusChatModel: "deepseek-ai/DeepSeek-V4-Flash-0731"
+nebiusChatExtra: '{"reasoning_effort": "none"}'
+nebiusPriceInputPerMtok: "0.14"
+nebiusPriceOutputPerMtok: "0.28"
+nebiusBatchPriceInputPerMtok: "0.07"
+nebiusBatchPriceOutputPerMtok: "0.14"
 # Separate from Mistral's cap. Per pod: replicas x cap is the real ceiling.
 nebiusSpendCapUsdDaily: "10.0"
 # Translation jobs (POST /translate/jobs): "auto" = a Nebius batch, run here

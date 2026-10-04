@@ -60,6 +60,7 @@ def _build_hosted_backends(
             price_output_per_mtok=settings.nebius_price_output_per_mtok,
             batch_price_input_per_mtok=settings.nebius_batch_price_input_per_mtok,
             batch_price_output_per_mtok=settings.nebius_batch_price_output_per_mtok,
+            chat_extra=settings.nebius_chat_extra,
         )
     return mistral, nebius
 

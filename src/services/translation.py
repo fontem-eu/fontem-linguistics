@@ -31,6 +31,12 @@ from src.infra.spend_cap import SpendCap
 UNDETERMINED_CACHE_KEY = f"{UNDETERMINED}#2"
 
 
+#: The model every Nebius translation cached before the model became part of
+#: the cache key was made by: its entries keep the bare "nebius" key, so a
+#: switch back to it is served from them instead of paid for again.
+LEGACY_NEBIUS_MODEL = "google/gemma-3-27b-it"
+
+
 def cache_source(source_lang: str) -> str:
     """The source-language component of the cache key."""
     return UNDETERMINED_CACHE_KEY if source_lang == UNDETERMINED else source_lang
@@ -65,10 +71,11 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
             raise ValueError("targets must be non-empty")
 
         backend_str = backend.value
+        cache_key = self.cache_backend(backend)
         start = time.perf_counter()
 
         cached = await self.cache.get_translations(
-            text, cache_source(source_lang), targets, backend_str)
+            text, cache_source(source_lang), targets, cache_key)
         missing = [t for t in targets if t not in cached]
 
         if not missing:
@@ -84,7 +91,7 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
             )
 
         fresh, cost_usd = await self._call_backend(text, source_lang, missing, backend)
-        await self.cache.put_translations(text, cache_source(source_lang), backend_str, fresh)
+        await self.cache.put_translations(text, cache_source(source_lang), cache_key, fresh)
 
         merged = {**cached, **fresh}
         for _ in cached:
@@ -102,6 +109,15 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
             cached_targets=frozenset(cached.keys()),
             cost_usd=cost_usd,
         )
+
+    def cache_backend(self, backend: TranslationBackend) -> str:
+        """The backend component of the cache key. For Nebius it names the
+        model, so a translation is only reused while the model that made it
+        is the one configured; the legacy model keeps the bare key."""
+        if (backend is TranslationBackend.NEBIUS and self.nebius is not None
+                and self.nebius.chat_model != LEGACY_NEBIUS_MODEL):
+            return f"{backend.value}:{self.nebius.chat_model}"
+        return backend.value
 
     async def detect(self, texts: list[str], backend: TranslationBackend) -> DetectionResult:
         """Identify each text's language in one call. Nebius only.

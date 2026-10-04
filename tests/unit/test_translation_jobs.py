@@ -27,6 +27,7 @@ from src.domain.models import (
 )
 from src.infra.spend_cap import SpendCap
 from src.services.jobs import JobRefused, TranslationJobs
+from src.services.translation import TranslationService, cache_source
 
 pytestmark = pytest.mark.asyncio
 
@@ -117,6 +118,8 @@ class FakeCache:
 class FakeTranslation:
     """TranslationService's surface as jobs use it. ``script`` maps a text
     to what translating it does: an exception, or a list of outcomes."""
+
+    cache_backend = TranslationService.cache_backend      # the real key rule
 
     def __init__(self, nebius=None, cap_usd: float = 10.0, script=None) -> None:
         self.cache = FakeCache()
@@ -457,3 +460,20 @@ async def test_provider_mode_needs_nebius_configured():
 async def test_an_unknown_job_is_none():
     jobs, _ = _jobs(FakeTranslation())
     assert await jobs.status("nope") is None
+
+
+async def test_a_provider_job_caches_under_the_model_that_made_it():
+    """A translation is reused only while its model is configured: the
+    legacy model's cache is not served for another model, and the new
+    model's answers are cached under its own key."""
+    output, _ = _provider_output()
+    nebius = _nebius(ProviderApi(output=output))
+    nebius.chat_model = "deepseek-ai/DeepSeek-V4-Flash-0731"
+    translation = FakeTranslation(nebius=nebius)
+    translation.cache.rows[("b", cache_source("pl"), "nebius")] = {"en": "old", "de": "alt"}
+    jobs, _ = _jobs(translation, mode="provider")
+    job = await jobs.submit(_items("b"), NEBIUS)
+    assert job.status == QUEUED                       # the legacy entry did not answer it
+    await jobs.status(job.job_id)
+    key = "nebius:deepseek-ai/DeepSeek-V4-Flash-0731"
+    assert translation.cache.puts == [("b", cache_source("pl"), key, {"en": "B-en", "de": "B-de"})]
