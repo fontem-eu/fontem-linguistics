@@ -75,6 +75,12 @@ minilmEncoderId: "minilm@1.0.0-e8f8c21"
 labseMirrorRef: "contribute.void42.internal/golden/models/labse"
 inprocessLruSize: "4096"
 replicas: 2
+# Surge a new pod before stopping the old one: no gap in service, but it needs
+# room for two pods. Where the nodes have none, the environment's values set
+# maxSurge 0 / maxUnavailable 1 (replace in place, a few minutes' gap).
+rollingUpdate:
+  maxSurge: 1
+  maxUnavailable: 0
 resources:
   requests:
     memory: "1Gi"
