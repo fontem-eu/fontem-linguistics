@@ -62,3 +62,11 @@ TRANSLATION_JOBS = Counter(
 TRANSLATION_JOB_ITEMS = Counter(
     "translation_job_items_total", "Translation job items by mode and outcome.",
     ["mode", "outcome"])
+
+# Translations asked again with one tagged line per target because their JSON
+# answer would not parse (quotes inside a name, as a rule). "path" is realtime
+# or batch. Against translation_job_items_total this is the share of texts JSON
+# cannot carry; expect about 1 in 2,000.
+TRANSLATION_TAGGED_RETRIES = Counter(
+    "translation_tagged_retries_total",
+    "Translations re-asked as tagged lines after an unreadable JSON answer.", ["path"])

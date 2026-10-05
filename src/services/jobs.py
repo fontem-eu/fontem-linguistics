@@ -23,6 +23,7 @@ import asyncio
 import datetime as dt
 import time
 import uuid
+from dataclasses import dataclass
 
 from loguru import logger
 
@@ -52,7 +53,11 @@ from src.domain.models import (
     SpendCapExceeded,
     TranslationBackend,
 )
-from src.infra.metrics import TRANSLATION_JOB_ITEMS, TRANSLATION_JOBS
+from src.infra.metrics import (
+    TRANSLATION_JOB_ITEMS,
+    TRANSLATION_JOBS,
+    TRANSLATION_TAGGED_RETRIES,
+)
 from src.services.translation import TranslationService, cache_source
 
 AUTO, PROVIDER, REALTIME = "auto", "provider", "realtime"
@@ -241,6 +246,7 @@ class TranslationJobs:  # pylint: disable=too-many-instance-attributes
         for item in job.items:
             results.setdefault(item.id, ItemResult(
                 item.id, error=f"provider batch {state} without this item", retryable=True))
+        retagged = await _retag_unreadable(results, by_id, nebius)
         ordered = [results[i.id] for i in job.items]
         prefilled = {r.id for r in job.prefilled}
         for r in ordered:
@@ -251,7 +257,7 @@ class TranslationJobs:  # pylint: disable=too-many-instance-attributes
                     self.translation.cache_backend(TranslationBackend(job.backend)),
                     r.translations)
         cost = sum(r.cost_usd for r in ordered)
-        nebius.record_batch_spend(cost)
+        nebius.record_batch_spend(cost - retagged)      # the retries were chat calls
         await self._settle(job, cost)
         _count_items(PROVIDER, ordered)
         TRANSLATION_JOBS.labels(mode=PROVIDER, event="completed").inc()
@@ -412,9 +418,38 @@ def _line_result(line: dict, by_id: dict[str, JobItem],
     try:
         translations, usage = parse_translation_response(body, item.targets, NebiusError)
     except NebiusError as exc:
-        return ItemResult(item.id, error=_describe(exc),
-                          cost_usd=nebius.batch_chat_usd(body.get("usage") or {}))
+        return _UnreadableAnswer(item.id, error=_describe(exc),
+                                 cost_usd=nebius.batch_chat_usd(body.get("usage") or {}))
     return ItemResult(item.id, translations, cost_usd=nebius.batch_chat_usd(usage))
+
+
+@dataclass
+class _UnreadableAnswer(ItemResult):
+    """A batch line whose JSON would not parse: the text gets one more try,
+    as tagged lines, before the job completes."""
+
+
+async def _retag_unreadable(results: dict[str, ItemResult], by_id: dict[str, JobItem],
+                            nebius: NebiusBackend) -> float:
+    """Ask every unreadable line again now, tagged (see
+    `build_tagged_translate_prompt`), in place in ``results``; what those
+    calls cost. Each result carries the broken line's cost as well."""
+    spent = 0.0
+    for item_id, broken in list(results.items()):
+        if not isinstance(broken, _UnreadableAnswer):
+            continue
+        item = by_id[item_id]
+        TRANSLATION_TAGGED_RETRIES.labels(path="batch").inc()
+        try:
+            translations, cost = await nebius.translate_tagged_with_cost(
+                item.text, item.source_lang, item.targets)
+        except (NebiusError, NebiusTransientError) as exc:
+            results[item_id] = ItemResult(item_id, error=_describe(exc), cost_usd=broken.cost_usd,
+                                          retryable=isinstance(exc, NebiusTransientError))
+            continue
+        spent += cost
+        results[item_id] = ItemResult(item_id, translations, cost_usd=broken.cost_usd + cost)
+    return spent
 
 
 def _retryable(code, error) -> bool:

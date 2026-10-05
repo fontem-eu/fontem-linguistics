@@ -23,13 +23,15 @@ import httpx
 
 from src.backends.openai_chat import (
     build_detect_prompt,
+    build_tagged_translate_prompt,
     build_translate_prompt,
     parse_detect_response,
+    parse_tagged_translation_response,
     parse_translation_response,
     post_with_retries,
     price_usd,
 )
-from src.infra.metrics import LLM_SPEND_USD
+from src.infra.metrics import LLM_SPEND_USD, TRANSLATION_TAGGED_RETRIES
 
 
 class NebiusError(Exception):
@@ -118,40 +120,69 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         The cost comes back rather than being swallowed so the spend cap can
         settle on the real number instead of leaving an estimate standing —
         which is the difference between a budget and a guess.
-        """
-        data = await post_with_retries(
-            self.client, "/chat/completions", self.translate_payload(text, source_lang, targets),
-            max_retries=self.max_retries,
-            transient_cls=NebiusTransientError, error_cls=NebiusError,
-        )
-        translations, usage = parse_translation_response(data, targets, NebiusError)
-        cost = self.actual_chat_usd(usage)
-        self._record_chat_spend(usage)
-        return translations, cost
 
-    def translate_payload(self, text: str, source_lang: str, targets: list[str]) -> dict:
+        An answer whose JSON will not parse is asked once more as tagged
+        lines, and the cost is both calls'.
+        """
+        data = await self._chat(self.translate_payload(text, source_lang, targets))
+        try:
+            translations, usage = parse_translation_response(data, targets, NebiusError)
+        except NebiusError:
+            # The JSON did not survive the text — quotes inside a name, as a
+            # rule. What that answer cost is spent all the same.
+            broken = data.get("usage") or {}
+            self._record_chat_spend(broken)
+            TRANSLATION_TAGGED_RETRIES.labels(path="realtime").inc()
+            translations, cost = await self.translate_tagged_with_cost(text, source_lang, targets)
+            return translations, self.actual_chat_usd(broken) + cost
+        self._record_chat_spend(usage)
+        return translations, self.actual_chat_usd(usage)
+
+    async def translate_tagged_with_cost(
+        self, text: str, source_lang: str, targets: list[str],
+    ) -> tuple[dict[str, str], float]:
+        """Translate with one tagged line per target instead of JSON: for a
+        text whose JSON answer would not parse (see
+        `build_tagged_translate_prompt`)."""
+        data = await self._chat(self.translate_payload(text, source_lang, targets, tagged=True))
+        usage = data.get("usage") or {}
+        self._record_chat_spend(usage)      # spent whether or not the answer reads
+        translations, _usage = parse_tagged_translation_response(data, targets, NebiusError)
+        return translations, self.actual_chat_usd(usage)
+
+    def translate_payload(self, text: str, source_lang: str, targets: list[str],
+                          tagged: bool = False) -> dict:
         """The chat request for one text: the same whether it is sent now or
-        as a line of a batch, so both paths get the same translation."""
+        as a line of a batch, so both paths get the same translation. JSON
+        unless ``tagged``, which is plain text and so not in JSON mode."""
+        if tagged:
+            return self._chat_payload(build_tagged_translate_prompt(text, source_lang, targets),
+                                      json_mode=False)
         return self._chat_payload(build_translate_prompt(text, source_lang, targets))
 
-    def _chat_payload(self, prompt: str) -> dict:
+    def _chat_payload(self, prompt: str, json_mode: bool = True) -> dict:
         """A chat request for the configured model, with its extra parameters."""
-        return {
+        payload = {
             "model": self.chat_model,
             "messages": [{"role": "user", "content": prompt}],
-            "response_format": {"type": "json_object"},
             "temperature": 0.0,
             **self.chat_extra,
         }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        return payload
+
+    async def _chat(self, payload: dict) -> dict:
+        return await post_with_retries(
+            self.client, "/chat/completions", payload,
+            max_retries=self.max_retries,
+            transient_cls=NebiusTransientError, error_cls=NebiusError,
+        )
 
     async def detect_with_cost(self, texts: list[str]) -> tuple[list[str | None], float]:
         """Each text's ISO 639-1 code (None where the model gave none), and
         what the call was charged. One call for the whole list."""
-        data = await post_with_retries(
-            self.client, "/chat/completions", self._chat_payload(build_detect_prompt(texts)),
-            max_retries=self.max_retries,
-            transient_cls=NebiusTransientError, error_cls=NebiusError,
-        )
+        data = await self._chat(self._chat_payload(build_detect_prompt(texts)))
         codes, usage = parse_detect_response(data, len(texts), NebiusError)
         self._record_chat_spend(usage)
         return codes, self.actual_chat_usd(usage)

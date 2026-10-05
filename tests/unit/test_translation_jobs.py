@@ -148,8 +148,15 @@ def _completion(translations: dict, prompt: int = 100, completion: int = 200) ->
             "usage": {"prompt_tokens": prompt, "completion_tokens": completion}}
 
 
-class ProviderApi:
-    """Nebius files and batches, scripted per test."""
+def _tagged_completion(translations: dict, prompt: int = 100, completion: int = 200) -> dict:
+    tagged = "\n".join(f"<{lang}>{text}</{lang}>" for lang, text in translations.items())
+    return {"choices": [{"message": {"content": tagged}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": prompt, "completion_tokens": completion}}
+
+
+class ProviderApi:  # pylint: disable=too-many-instance-attributes
+    """Nebius files and batches, and the real-time calls a job makes besides,
+    scripted per test."""
 
     def __init__(self, create_status: int = 200, state: str = "completed",
                  output=None, errors=None, batch_errors=None) -> None:
@@ -160,6 +167,8 @@ class ProviderApi:
         self.batch_errors = batch_errors
         self.uploads: list[str] = []
         self.creates = 0
+        self.chat_answers: list[dict] = []      # real-time calls, answered in order
+        self.chats: list[dict] = []
 
     # One return per endpoint it plays, as a router would have.
     async def __call__(  # pylint: disable=too-many-return-statements
@@ -186,6 +195,9 @@ class ProviderApi:
             return httpx.Response(200, text="\n".join(json.dumps(line) for line in lines))
         if method == "DELETE":
             return httpx.Response(200, json={})
+        if method == "POST" and path.endswith("/chat/completions") and self.chat_answers:
+            self.chats.append(json.loads(request.content))
+            return httpx.Response(200, json=self.chat_answers.pop(0))
         return httpx.Response(404, json={"detail": path})
 
 
@@ -330,6 +342,7 @@ def _provider_output() -> tuple[list, list]:
 async def test_a_provider_job_sends_only_what_the_cache_cannot_answer():
     output, errors = _provider_output()
     api = ProviderApi(state="in_progress", output=output, errors=errors)
+    api.chat_answers = [_tagged_completion({"en": "C-en", "de": "C-de"}, 300, 60)]
     translation = FakeTranslation(nebius=_nebius(api))
     translation.cache.rows[("a", "pl", "nebius")] = {"en": "A-en", "de": "A-de"}
     jobs, _ = _jobs(translation, mode="provider")
@@ -346,17 +359,44 @@ async def test_a_provider_job_sends_only_what_the_cache_cannot_answer():
     assert done.status == COMPLETED and [r.id for r in done.results] == list("abcdefg")
     assert got["a"].translations == {"en": "A-en", "de": "A-de"} and got["a"].cost_usd == 0
     assert got["b"].translations == {"en": "B-en", "de": "B-de"}
-    assert not got["c"].retryable and "missing" in got["c"].error and got["c"].cost_usd > 0
+    # c's JSON came back without "de": asked once more, now and tagged.
+    assert got["c"].translations == {"en": "C-en", "de": "C-de"} and not got["c"].error
+    assert len(api.chats) == 1 and "response_format" not in api.chats[0]
+    assert "<de>...</de>" in api.chats[0]["messages"][0]["content"]
     assert got["d"].retryable and "status=429" in got["d"].error
     assert got["e"].retryable and "without this item" in got["e"].error
     assert not got["f"].retryable and "context length" in got["f"].error
     assert got["g"].retryable
     batch_cost = ((100 * 0.05 + 200 * 0.15) + (100 * 0.05 + 100 * 0.15)) / 1_000_000
-    assert done.cost_usd == pytest.approx(batch_cost)
-    assert translation.nebius_spend_cap.spent_usd == pytest.approx(batch_cost)
-    assert translation.cache.puts == [("b", "pl", "nebius", {"en": "B-en", "de": "B-de"})]
+    retry_cost = (300 * 0.10 + 60 * 0.30) / 1_000_000          # real-time prices
+    assert got["c"].cost_usd == pytest.approx((100 * 0.05 + 100 * 0.15) / 1_000_000 + retry_cost)
+    assert done.cost_usd == pytest.approx(batch_cost + retry_cost)
+    assert translation.nebius_spend_cap.spent_usd == pytest.approx(batch_cost + retry_cost)
+    assert translation.cache.puts == [("b", "pl", "nebius", {"en": "B-en", "de": "B-de"}),
+                                      ("c", "pl", "nebius", {"en": "C-en", "de": "C-de"})]
     again = await jobs.status(job.job_id)                   # final: the provider is not asked
     assert again.status == COMPLETED and api.creates == 1
+
+
+async def test_an_unreadable_line_whose_tagged_retry_fails_too_is_an_error_with_its_cost():
+    """Nothing half-translated is passed off as done: the item fails, final
+    unless the retry failed on the provider's side, and keeps what the
+    broken line cost."""
+    output = [{"custom_id": "a", "response": {"status_code": 200,
+                                              "body": _completion({"en": "A-en"}, 100, 100)}},
+              {"custom_id": "b", "response": {"status_code": 200,
+                                              "body": _completion({"en": "B-en"}, 100, 100)}}]
+    api = ProviderApi(output=output)
+    api.chat_answers = [_tagged_completion({"en": "A-en"})]     # "de" missing again; b gets a 404
+    translation = FakeTranslation(nebius=_nebius(api))
+    jobs, _ = _jobs(translation, mode="provider")
+    job = await jobs.submit(_items("a", "b"), NEBIUS)
+    done = await jobs.status(job.job_id)
+    got = {r.id: r for r in done.results}
+    assert "tagged response" in got["a"].error and not got["a"].retryable
+    assert "status=404" in got["b"].error and not got["b"].retryable
+    assert got["a"].cost_usd == pytest.approx((100 * 0.05 + 100 * 0.15) / 1_000_000)
+    assert not translation.cache.puts
 
 
 async def test_a_job_the_cache_answers_in_full_never_reaches_the_provider():
