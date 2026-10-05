@@ -97,6 +97,104 @@ def parse_translation_response(
     return {t: parsed[t] for t in targets}, (data.get("usage") or {})
 
 
+def build_tagged_translate_prompt(text: str, source_lang: str, targets: list[str]) -> str:
+    """The same request with one ``<code>...</code>`` line back per target:
+    what a text is asked again in when its JSON answer would not parse.
+
+    Names quote their namesakes — „Dealul Spirii", "Puławy", “Settle in
+    Estonia” — and DeepSeek-V4-Flash, writing JSON, closes the string at the
+    inner quote and runs on to the token limit: 23 of 49,000 names failed
+    all three attempts on 2026-10-04, and 18 of those 23 still did when
+    asked again. Between tags a quote is just a character, and all 23 came
+    back whole.
+
+    A fallback rather than the only format, because it reads a little worse:
+    on 224 sample texts two blind judges scored it 2-3 points under the JSON
+    answer (Hermes-4-405B 93.0 vs 96.0, DeepSeek-V4-Pro 89.8 vs 92.1), mostly
+    names left untranslated. Telling it to "keep quotation marks exactly as
+    written" did worse still: it kept whole names as written.
+    """
+    pretty = ", ".join(f"{code} ({lang_fullname(code)})" for code in targets)
+    if source_lang == UNDETERMINED:
+        tags = ", ".join(f"<{t}>...</{t}>" for t in ["source_lang", *targets])
+        opening = (
+            "Translate the following text into every target language below. "
+            "Write each translation in its own target language; a translation may "
+            "equal the original text only for the language the text is already "
+            "written in. Also give <source_lang>: the ISO 639-1 code of the text's "
+            "language. "
+        )
+    else:
+        tags = ", ".join(f"<{t}>...</{t}>" for t in targets)
+        opening = (
+            "Translate the following text from "
+            f"{lang_fullname(source_lang)} into the target languages. "
+        )
+    return (
+        opening +
+        "Preserve institutional terminology, do not paraphrase. Return each "
+        f"translation on a line of its own between its language's tags: {tags}. "
+        "No prose, no explanation.\n"
+        f"Target languages: {pretty}.\n"
+        f"Text: {text}"
+    )
+
+
+#: Any closing tag. DeepSeek-V4-Flash closes the right line with the wrong
+#: name now and then — `<cs>…</bg>` in 15 answers of 247, `<el>…</en>` once —
+#: and the opening tag already says which language the line is.
+_CLOSING_TAG = re.compile(r"</[a-z_]{2,11}>")
+_OPENING_TAG = re.compile(r"<[a-z_]{2,11}>")
+
+
+def _tagged(content: str, tag: str) -> str | None:
+    """The text after the first ``<tag>`` up to the next closing tag,
+    stripped. None when the tag is absent, holds nothing, or runs on into
+    another line's opening tag: a line left unclosed must not lend its
+    neighbour's language to this one."""
+    opening = f"<{tag}>"
+    start = content.find(opening)
+    if start < 0:
+        return None
+    start += len(opening)
+    closing = _CLOSING_TAG.search(content, start)
+    if closing is None:
+        return None
+    value = content[start:closing.start()].strip()
+    if not value or _OPENING_TAG.search(value):
+        return None
+    return value
+
+
+def parse_tagged_translation_response(
+    data: dict, targets: list[str], error_cls: type[Exception],
+) -> tuple[dict[str, str], dict]:
+    """``({lang: text}, usage)`` from a tagged answer, on the same terms as
+    `parse_translation_response`: a target missing is an error, not a
+    partial result. Each target is read on its own, so prose around the
+    tags costs nothing and the error names exactly what is missing."""
+    try:
+        choice = data["choices"][0]
+        content = choice["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise error_cls(f"malformed chat response: {exc}") from exc
+    if not isinstance(content, str):
+        raise error_cls("malformed chat response: no text content")
+
+    translations: dict[str, str] = {}
+    missing: list[str] = []
+    for target in targets:
+        value = _tagged(content, target)
+        if value is None:
+            missing.append(target)
+        else:
+            translations[target] = value
+    if missing:
+        cut = " (cut off at the token limit)" if choice.get("finish_reason") == "length" else ""
+        raise error_cls(f"missing/malformed target(s) in tagged response{cut}: {missing}")
+    return translations, (data.get("usage") or {})
+
+
 #: What a detection may answer: a two-letter ISO 639-1 code, or "und".
 _LANG_CODE = re.compile(r"^(?:[a-z]{2}|und)$")
 
