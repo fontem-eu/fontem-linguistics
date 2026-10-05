@@ -75,7 +75,9 @@ jobs:
         uses: ./.ci-actions/actions/docker-build-sign
         with:
           image: contribute.void42.internal/fontem/fontem-linguistics
-          cosign-key: ${{ secrets.COSIGN_KEY }}
+          vault-role-id: ${{ secrets.VAULT_SIGNER_ROLE_ID }}
+          vault-secret-id: ${{ secrets.VAULT_SIGNER_SECRET_ID }}
+          sbom-coverage: enforce
           registry-user: ${{ secrets.REGISTRY_USER }}
           registry-password: ${{ secrets.REGISTRY_PASSWORD }}
           # Distroless runtime, no pip: fail the build if a shell, package
