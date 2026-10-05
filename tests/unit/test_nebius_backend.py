@@ -5,6 +5,7 @@ import json
 
 import httpx
 import pytest
+from prometheus_client import REGISTRY
 
 from src.backends.nebius import (
     NebiusBackend,
@@ -14,8 +15,10 @@ from src.backends.nebius import (
 )
 from src.backends.openai_chat import (
     build_detect_prompt,
+    build_tagged_translate_prompt,
     build_translate_prompt,
     parse_detect_response,
+    parse_tagged_translation_response,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -168,6 +171,130 @@ def test_a_known_source_prompt_is_unchanged():
         "Preserve institutional terminology, do not paraphrase. Return strict "
         'JSON with keys: "de", "en". No prose, no explanation.\n'
         "Target languages: de (German), en (English).\nText: Travaux")
+
+
+# ── the tagged fallback ─────────────────────────────────────────────
+
+
+def _tagged(translations: dict[str, str]) -> str:
+    return "\n".join(f"<{lang}>{text}</{lang}>" for lang, text in translations.items())
+
+
+def _content(text: str, finish_reason: str = "stop", usage: dict | None = None) -> dict:
+    return {"choices": [{"message": {"content": text}, "finish_reason": finish_reason}],
+            "usage": usage or {"prompt_tokens": 1, "completion_tokens": 2}}
+
+
+async def test_an_answer_whose_json_breaks_is_asked_again_tagged():
+    """The 2026-10-04 failure: an ASCII quote closing a typographic one ends
+    the JSON string early, and the model runs on to the token limit."""
+    seen = []
+    broken = '{"mt": "Spitalul „Mavromati" Botoșani", "ga": "Spitalul „Mavromati" Bot'
+    runaway = {"prompt_tokens": 150, "completion_tokens": 8192}
+    answers = [httpx.Response(200, json=_content(broken, "length", runaway)),
+               httpx.Response(200, json=_content(_tagged({
+                   "mt": 'Sptar „Mavromati" Botoșani', "ga": 'Ospidéal „Mavromati" Botoșani',
+                   "et": 'Haigla „Mavromati" Botoșani'}),
+                   usage={"prompt_tokens": 200, "completion_tokens": 90}))]
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return answers.pop(0)
+
+    retries = ("translation_tagged_retries_total", {"path": "realtime"})
+    before = REGISTRY.get_sample_value(*retries) or 0.0
+    got, cost = await _build(handler).translate_with_cost(
+        "Spitalul Județean de Urgență „Mavromati\" Botoșani", "ro", TARGETS)
+    assert got["et"] == 'Haigla „Mavromati" Botoșani' and set(got) == set(TARGETS)
+    assert seen[0]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in seen[1]
+    assert "<mt>...</mt>" in seen[1]["messages"][0]["content"]
+    assert cost == pytest.approx((150 * 0.13 + 8192 * 0.40 + 200 * 0.13 + 90 * 0.40) / 1e6)
+    assert REGISTRY.get_sample_value(*retries) == before + 1
+
+
+async def test_a_readable_json_answer_is_not_asked_again():
+    calls = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return _completion({t: "x" for t in TARGETS})
+
+    await _build(handler).translate("Roboty budowlane", "pl", TARGETS)
+    assert len(calls) == 1
+
+
+async def test_a_tagged_retry_that_fails_too_is_an_error():
+    answers = [_completion({"mt": "x"}), httpx.Response(200, json=_content("<mt>x</mt>"))]
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return answers.pop(0)
+
+    with pytest.raises(NebiusError, match=r"tagged response: \['ga', 'et'\]"):
+        await _build(handler).translate("Roboty budowlane", "pl", TARGETS)
+
+
+async def test_the_tagged_prompt_asks_for_tags_in_the_judged_wording():
+    """Only the answer's shape differs from the JSON prompt."""
+    assert build_tagged_translate_prompt("Travaux", "fr", ["de", "en"]) == (
+        "Translate the following text from French into the target languages. "
+        "Preserve institutional terminology, do not paraphrase. Return each "
+        "translation on a line of its own between its language's tags: "
+        "<de>...</de>, <en>...</en>. No prose, no explanation.\n"
+        "Target languages: de (German), en (English).\nText: Travaux")
+    undetermined = build_tagged_translate_prompt("Anskaffelse", "und", ["en"])
+    assert "<source_lang>...</source_lang>, <en>...</en>" in undetermined
+    assert "from und" not in undetermined
+
+
+async def test_quotes_inside_a_name_survive_as_written():
+    answers = {
+        "en": 'Emergency Situations Inspectorate „Dealul Spirii" Bucharest',
+        "de": "Bereitstellung des Anpassungsprogramms “Settle in Estonia”",
+        "it": 'UNIVERSITA\' DEGLI STUDI "G. d\'Annunzio" Chieti/Pescara',
+    }
+    got, usage = parse_tagged_translation_response(
+        _content(_tagged(answers)), list(answers), NebiusError)
+    assert got == answers and usage == {"prompt_tokens": 1, "completion_tokens": 2}
+
+
+async def test_each_target_is_read_on_its_own():
+    """Prose around the tags, a translation over two lines, a target
+    answered twice: each language comes from its own first tag."""
+    content = ("Here are the translations:\n<de>Bauarbeiten</de>\n"
+               "<en>Construction\nworks</en>\n<de>Bauleistungen</de>\nDone.")
+    got, _usage = parse_tagged_translation_response(_content(content), ["de", "en"], NebiusError)
+    assert got == {"de": "Bauarbeiten", "en": "Construction\nworks"}
+
+
+async def test_a_line_closed_with_the_wrong_name_still_counts():
+    """DeepSeek-V4-Flash closes its Czech line with </bg> now and then;
+    the opening tag says which language the line is."""
+    content = "<bg>Агенция</bg>\n<cs>Agentura</bg>\n<el>Οργανισμός</en>"
+    got, _usage = parse_tagged_translation_response(
+        _content(content), ["bg", "cs", "el"], NebiusError)
+    assert got == {"bg": "Агенция", "cs": "Agentura", "el": "Οργανισμός"}
+
+
+async def test_an_empty_or_unclosed_target_is_missing_and_named():
+    """An unclosed line must not swallow its neighbour: <de> would
+    otherwise come back holding the English line as well."""
+    content = "<fr>  </fr>\n<de>Bauarbeiten\n<en>Construction works</en>\n<it>Lavori"
+    with pytest.raises(NebiusError, match=r"\['fr', 'de', 'it'\]"):
+        parse_tagged_translation_response(
+            _content(content), ["fr", "de", "en", "it"], NebiusError)
+
+
+async def test_a_tagged_answer_cut_off_at_the_token_limit_says_so():
+    content = "<de>Bauarbeiten</de>\n<en>Construction wo"
+    with pytest.raises(NebiusError, match=r"cut off at the token limit\): \['en'\]"):
+        parse_tagged_translation_response(_content(content, "length"), ["de", "en"], NebiusError)
+
+
+async def test_a_completion_without_text_is_malformed():
+    for data in ({"choices": []}, {"choices": [{"message": {"content": None}}]}):
+        with pytest.raises(NebiusError, match="malformed chat response"):
+            parse_tagged_translation_response(data, TARGETS, NebiusError)
 
 
 # ── language detection ──────────────────────────────────────────────
