@@ -35,9 +35,10 @@ class Provider:
         self.prompts.append(prompt)
         if prompt.startswith("Summarise") or prompt.startswith("This summary is"):
             content = self.summaries.pop(0)
-        else:                                            # a translation, JSON keyed by code
+        else:                     # a translation, JSON keyed by code, as long as the text
             keys = re.findall(r'"([a-z]{2})"', prompt.split("Target languages:")[0])
-            content = json.dumps({k: f"[{k}] translated" for k in keys})
+            text = prompt[prompt.index("Text: ") + len("Text: "):]
+            content = json.dumps({k: f"[{k}] {text}" for k in keys})
         return httpx.Response(200, json={
             "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 300, "completion_tokens": 100}})
@@ -55,7 +56,8 @@ def test_a_summary_comes_in_the_texts_language_and_translated_into_the_rest():
     body = r.json()
     assert body["lang"] == "de" and body["cached"] is False
     assert body["summaries"]["de"] == "Vertritt die deutsche Brauwirtschaft bei der EU."
-    assert set(body["summaries"]) == set(EU) and body["summaries"]["fr"] == "[fr] translated"
+    assert set(body["summaries"]) == set(EU)
+    assert body["summaries"]["fr"] == "[fr] Vertritt die deutsche Brauwirtschaft bei der EU."
     summarise = provider.prompts[0]
     assert "in German, in at most 280 characters" in summarise
     assert "what the organisation lobbies for" in summarise

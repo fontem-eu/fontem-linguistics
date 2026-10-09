@@ -408,6 +408,33 @@ async def test_an_unreadable_line_whose_tagged_retry_fails_too_is_an_error_with_
     assert not translation.cache.puts
 
 
+async def test_a_batch_line_that_cuts_a_translation_short_has_that_language_asked_again():
+    """Readable JSON in which English stops at the quote: English alone is
+    asked again, now and tagged, and the job hands back the whole text."""
+    goal = ("Wspieramy „zieloną transformację” przemysłu "
+            "w całej Unii Europejskiej i w Polsce.")
+    german = ("Wir unterstützen die „grüne Transformation“ der Industrie "
+              "in der ganzen EU und in Polen.")
+    english = ("We support the “green transition” of industry "
+               "across the European Union and in Poland.")
+    output = [{"custom_id": "goal", "response": {"status_code": 200, "body": _completion(
+        {"en": "We support the ", "de": german}, 100, 100)}}]
+    api = ProviderApi(output=output)
+    api.chat_answers = [_tagged_completion({"en": english}, 300, 60)]
+    translation = FakeTranslation(nebius=_nebius(api))
+    jobs, _ = _jobs(translation, mode="provider")
+    job = await jobs.submit([JobItem(id="goal", text=goal, source_lang="pl",
+                                     targets=list(TARGETS))], NEBIUS)
+    (got,) = (await jobs.status(job.job_id)).results
+    assert got.translations == {"en": english, "de": german} and not got.error
+    assert len(api.chats) == 1
+    asked = api.chats[0]["messages"][0]["content"]
+    assert "<en>...</en>" in asked and "<de>...</de>" not in asked
+    assert got.cost_usd == pytest.approx((100 * 0.05 + 100 * 0.15 + 300 * 0.10 + 60 * 0.30)
+                                         / 1_000_000)
+    assert translation.cache.puts == [(goal, "pl", "nebius", {"en": english, "de": german})]
+
+
 async def test_a_job_the_cache_answers_in_full_never_reaches_the_provider():
     api = ProviderApi()
     translation = FakeTranslation(nebius=_nebius(api))
@@ -474,6 +501,21 @@ async def test_auto_runs_the_job_here_when_the_provider_refuses_and_asks_again_l
 async def test_auto_without_nebius_runs_in_real_time():
     jobs, _ = _jobs(FakeTranslation(nebius=None), mode="auto")
     assert (await jobs.submit(_items("a"), NEBIUS)).mode == "realtime"
+
+
+async def test_a_text_of_several_lines_is_translated_here_not_in_a_provider_batch():
+    """A batch line is one request, and a text of several paragraphs asked
+    in one request often comes back as its first (see
+    NebiusBackend._by_line): a job holding one goes a line at a time, here.
+    One that does not still goes to the provider."""
+    api = ProviderApi(state="in_progress")
+    jobs, _ = _jobs(FakeTranslation(nebius=_nebius(api)), mode="auto")
+    goal = JobItem(id="goal", text="We represent brewers.\n\nWe also represent maltsters.",
+                   source_lang="en", targets=["de"])
+    assert (await jobs.submit([goal], NEBIUS)).mode == "realtime" and not api.uploads
+    assert (await jobs.submit(_items("a"), NEBIUS)).mode == "provider"
+    with pytest.raises(ValueError, match="several lines"):
+        await jobs.submit([goal], NEBIUS, mode="provider")
 
 
 async def test_a_provider_hiccup_on_submission_frees_the_reservation():

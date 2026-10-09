@@ -70,3 +70,11 @@ TRANSLATION_JOB_ITEMS = Counter(
 TRANSLATION_TAGGED_RETRIES = Counter(
     "translation_tagged_retries_total",
     "Translations re-asked as tagged lines after an unreadable JSON answer.", ["path"])
+
+# Texts with a translation that came back under half its length in a readable
+# JSON answer, asked again as tagged lines for those languages (see
+# openai_chat.cut_short). "path" is realtime or batch. 46 of 518 lobbying goals
+# with line breaks did on 2026-10-09; titles, which are one line, rarely should.
+TRANSLATION_SHORT_RETRIES = Counter(
+    "translation_short_retries_total",
+    "Texts whose JSON answer cut a translation short, re-asked as tagged lines.", ["path"])
