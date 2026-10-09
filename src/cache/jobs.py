@@ -47,14 +47,22 @@ QUEUED, RUNNING, COMPLETED, FAILED = "queued", "running", "completed", "failed"
 FINAL = frozenset({COMPLETED, FAILED})
 
 
+#: What a job item asks for: its translations, or a short summary per language.
+TRANSLATE, SUMMARIZE = "translate", "summarize"
+
+
 @dataclass
 class JobItem:
-    """One text to translate, as the caller identified it."""
+    """One text to translate or summarise, as the caller identified it.
+    Items stored before summaries existed load as translations."""
 
     id: str
     text: str
     source_lang: str
     targets: list[str]
+    task: str = TRANSLATE
+    max_chars: int | None = None
+    about: str | None = None
 
 
 @dataclass

@@ -11,6 +11,8 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from src.api.deps import Services
 from src.api.schemas import (
+    SummarizeRequest,
+    SummarizeResponse,
     EmbedBatchRequest,
     EmbedBatchResponse,
     BatchTranslateRequest,
@@ -175,6 +177,40 @@ async def translate_batch(
 #: a stated language: 214 right at 20 per prompt, 212 at 40, for about
 #: USD 0.008 per thousand titles either way.
 DETECT_CHUNK = 20
+
+
+@router.post(
+    "/summarize",
+    responses={
+        400: {"description": "Empty text, or a backend that does not summarise."},
+        429: {"description": "Daily spend cap exceeded."},
+        502: {"description": "The provider returned an error or a transient failure."},
+        503: {"description": "Backend unavailable or circuit breaker open."},
+    },
+)
+async def summarize(req: SummarizeRequest, request: Request) -> SummarizeResponse:
+    """A short summary — a tweet long by default — in the text's language,
+    and its machine translations into ``targets``."""
+    try:
+        result = await _services(request).translation.summarize(
+            req.text, req.source_lang, req.targets, req.backend,
+            max_chars=req.max_chars, about=req.about)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CircuitOpen as exc:
+        raise HTTPException(status_code=503, detail=str(exc),
+                            headers={"X-Backend-State": "circuit-open"}) from exc
+    except SpendCapExceeded as exc:
+        raise HTTPException(status_code=429, detail=str(exc),
+                            headers={"X-Backend-State": "spend-cap-exceeded"}) from exc
+    except BackendUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except NebiusTransientError as exc:
+        raise HTTPException(status_code=502, detail=f"nebius transient failure: {exc}") from exc
+    except NebiusError as exc:
+        raise HTTPException(status_code=502, detail=f"nebius error: {exc}") from exc
+    return SummarizeResponse(lang=result.lang, summaries=result.summaries, cached=result.cached,
+                             backend=result.backend, cost_usd=result.cost_usd)
 
 
 @router.post(
@@ -405,7 +441,8 @@ def _job_response(job: JobRecord) -> JobResponse:
 )
 async def submit_translation_job(req: JobSubmitRequest, request: Request) -> JobResponse:
     """Accept a set of texts to translate; poll GET /translate/jobs/{job_id}."""
-    items = [JobItem(id=i.id, text=i.text, source_lang=i.source_lang, targets=i.targets)
+    items = [JobItem(id=i.id, text=i.text, source_lang=i.source_lang, targets=i.targets,
+                     task=i.task, max_chars=i.max_chars, about=i.about)
              for i in req.items]
     try:
         job = await _jobs(request).submit(items, req.backend, req.mode)

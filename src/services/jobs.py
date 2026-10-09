@@ -42,6 +42,8 @@ from src.cache.jobs import (
     FINAL,
     QUEUED,
     RUNNING,
+    SUMMARIZE,
+    TRANSLATE,
     ItemResult,
     JobItem,
     JobRecord,
@@ -61,6 +63,9 @@ from src.infra.metrics import (
 from src.services.translation import TranslationService, cache_source
 
 AUTO, PROVIDER, REALTIME = "auto", "provider", "realtime"
+
+#: A summary's length when the item does not say: a tweet.
+DEFAULT_SUMMARY_CHARS = 280
 
 #: A batch line that came back with one of these can succeed another time.
 _RETRYABLE_STATUS = frozenset({408, 409, 429, 500, 502, 503, 504})
@@ -129,6 +134,12 @@ class TranslationJobs:  # pylint: disable=too-many-instance-attributes
         wanted = mode or self.mode
         if wanted not in (AUTO, PROVIDER, REALTIME):
             raise ValueError(f"unknown job mode {wanted!r}")
+        if any(i.task == SUMMARIZE for i in items):
+            # A summary is two steps — write it, translate it — and a batch
+            # carries one request per line: summaries are made here.
+            if wanted == PROVIDER:
+                raise ValueError("summaries are made here, never in a provider batch")
+            return await self._submit_realtime(items, backend)
         if wanted == PROVIDER:
             return await self._submit_provider(items, backend, self._nebius(backend))
         if wanted == AUTO and self._provider_ready(backend):
@@ -375,6 +386,12 @@ class TranslationJobs:  # pylint: disable=too-many-instance-attributes
         for attempt in range(_ITEM_ATTEMPTS):
             async with self._window:
                 try:
+                    if item.task == SUMMARIZE:
+                        summary = await self.translation.summarize(
+                            item.text, item.source_lang, item.targets, backend,
+                            max_chars=item.max_chars or DEFAULT_SUMMARY_CHARS, about=item.about)
+                        return ItemResult(item.id, dict(summary.summaries),
+                                          cost_usd=summary.cost_usd)
                     result = await self.translation.translate(
                         text=item.text, source_lang=item.source_lang,
                         targets=item.targets, backend=backend)
@@ -400,6 +417,8 @@ def _validate(items: list[JobItem]) -> None:
     for item in items:
         if not item.text.strip() or not item.targets:
             raise ValueError(f"item {item.id}: empty text or no targets")
+        if item.task not in (TRANSLATE, SUMMARIZE):
+            raise ValueError(f"item {item.id}: unknown task {item.task!r}")
 
 
 def _line_result(line: dict, by_id: dict[str, JobItem],
