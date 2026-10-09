@@ -176,10 +176,7 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
     async def _call_nebius_summary(self, text: str, lang: str, max_chars: int,
                                    about: str | None) -> tuple[str, float]:
         """Breaker, reserve, call, settle — as for a translation."""
-        if self.nebius is None or self.nebius_breaker is None or self.nebius_spend_cap is None:
-            raise BackendUnavailable("nebius backend not configured")
-        if not await self.nebius_breaker.allow():
-            raise CircuitOpen("nebius circuit breaker is open")
+        await self._nebius_ready()
         estimate = self.nebius.estimate_chat_usd(len(text), 2)
         await self.nebius_spend_cap.reserve(estimate)
         try:
@@ -192,6 +189,13 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
         await self.nebius_spend_cap.finalize(estimate, actual)
         await self.nebius_breaker.record_success()
         return summary, actual
+
+    async def _nebius_ready(self) -> None:
+        """Raise unless Nebius is configured and its breaker lets a call through."""
+        if self.nebius is None or self.nebius_breaker is None or self.nebius_spend_cap is None:
+            raise BackendUnavailable("nebius backend not configured")
+        if not await self.nebius_breaker.allow():
+            raise CircuitOpen("nebius circuit breaker is open")
 
     def cache_backend(self, backend: TranslationBackend) -> str:
         """The backend component of the cache key. For Nebius it names the
@@ -213,10 +217,7 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
             raise ValueError("every text must be non-empty")
         if backend is not TranslationBackend.NEBIUS:
             raise ValueError("language detection is served by the nebius backend only")
-        if self.nebius is None or self.nebius_breaker is None or self.nebius_spend_cap is None:
-            raise BackendUnavailable("nebius backend not configured")
-        if not await self.nebius_breaker.allow():
-            raise CircuitOpen("nebius circuit breaker is open")
+        await self._nebius_ready()
 
         estimate = self.nebius.estimate_detect_usd(sum(len(t) for t in texts), len(texts))
         await self.nebius_spend_cap.reserve(estimate)
@@ -277,10 +278,7 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
         provider's usage block actually charged, so a title that translates
         longer than guessed cannot walk past the cap unnoticed.
         """
-        if self.nebius is None or self.nebius_breaker is None or self.nebius_spend_cap is None:
-            raise BackendUnavailable("nebius backend not configured")
-        if not await self.nebius_breaker.allow():
-            raise CircuitOpen("nebius circuit breaker is open")
+        await self._nebius_ready()
 
         estimate = self.nebius.estimate_chat_usd(len(text), len(missing))
         await self.nebius_spend_cap.reserve(estimate)
