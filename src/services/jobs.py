@@ -35,7 +35,7 @@ from src.backends.nebius import (
     NebiusError,
     NebiusTransientError,
 )
-from src.backends.openai_chat import parse_translation_response
+from src.backends.openai_chat import cut_short, parse_translation_response
 from src.cache.jobs import (
     COMPLETED,
     FAILED,
@@ -139,6 +139,13 @@ class TranslationJobs:  # pylint: disable=too-many-instance-attributes
             # carries one request per line: summaries are made here.
             if wanted == PROVIDER:
                 raise ValueError("summaries are made here, never in a provider batch")
+            return await self._submit_realtime(items, backend)
+        if any("\n" in i.text.strip() for i in items):
+            # Such a text goes a line at a time (NebiusBackend._by_line);
+            # a batch line is one request for the whole text.
+            if wanted == PROVIDER:
+                raise ValueError("texts of several lines are translated here, a line at a time, "
+                                 "never in a provider batch")
             return await self._submit_realtime(items, backend)
         if wanted == PROVIDER:
             return await self._submit_provider(items, backend, self._nebius(backend))
@@ -439,29 +446,38 @@ def _line_result(line: dict, by_id: dict[str, JobItem],
     except NebiusError as exc:
         return _UnreadableAnswer(item.id, error=_describe(exc),
                                  cost_usd=nebius.batch_chat_usd(body.get("usage") or {}))
+    if cut_short(item.text, translations):
+        return _UnreadableAnswer(item.id, translations, cost_usd=nebius.batch_chat_usd(usage))
     return ItemResult(item.id, translations, cost_usd=nebius.batch_chat_usd(usage))
 
 
 @dataclass
 class _UnreadableAnswer(ItemResult):
-    """A batch line whose JSON would not parse: the text gets one more try,
-    as tagged lines, before the job completes."""
+    """A batch line whose JSON would not parse, or that cut a translation
+    short (``translations`` then holds the answer as read): the text gets
+    one more try, as tagged lines, before the job completes."""
 
 
 async def _retag_unreadable(results: dict[str, ItemResult], by_id: dict[str, JobItem],
                             nebius: NebiusBackend) -> float:
     """Ask every unreadable line again now, tagged (see
-    `build_tagged_translate_prompt`), in place in ``results``; what those
-    calls cost. Each result carries the broken line's cost as well."""
+    `build_tagged_translate_prompt`) — a line that only cut some
+    translations short, for those languages alone — in place in
+    ``results``; what those calls cost. Each result carries the broken
+    line's cost as well."""
     spent = 0.0
     for item_id, broken in list(results.items()):
         if not isinstance(broken, _UnreadableAnswer):
             continue
         item = by_id[item_id]
-        TRANSLATION_TAGGED_RETRIES.labels(path="batch").inc()
         try:
-            translations, cost = await nebius.translate_tagged_with_cost(
-                item.text, item.source_lang, item.targets)
+            if broken.translations:     # read, but with translations cut short
+                translations, cost = await nebius.ask_short_again(
+                    item.text, item.source_lang, broken.translations, "batch")
+            else:
+                TRANSLATION_TAGGED_RETRIES.labels(path="batch").inc()
+                translations, cost = await nebius.translate_tagged_with_cost(
+                    item.text, item.source_lang, item.targets)
         except (NebiusError, NebiusTransientError) as exc:
             results[item_id] = ItemResult(item_id, error=_describe(exc), cost_usd=broken.cost_usd,
                                           retryable=isinstance(exc, NebiusTransientError))

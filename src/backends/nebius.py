@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass, field
 
 import httpx
@@ -28,6 +29,7 @@ from src.backends.openai_chat import (
     build_tagged_translate_prompt,
     build_translate_prompt,
     clean_summary,
+    cut_short,
     fit_summary,
     parse_detect_response,
     parse_tagged_translation_response,
@@ -36,7 +38,11 @@ from src.backends.openai_chat import (
     price_usd,
     summary_overshoot_prompt,
 )
-from src.infra.metrics import LLM_SPEND_USD, TRANSLATION_TAGGED_RETRIES
+from src.infra.metrics import (
+    LLM_SPEND_USD,
+    TRANSLATION_SHORT_RETRIES,
+    TRANSLATION_TAGGED_RETRIES,
+)
 
 
 class NebiusError(Exception):
@@ -78,6 +84,34 @@ def target_groups(text_chars: int, targets: list[str]) -> list[list[str]]:
     per_target = 12 + 0.45 * text_chars
     size = max(1, int(OUTPUT_TOKEN_BUDGET // per_target))
     return [targets[i:i + size] for i in range(0, len(targets), size)] or [targets]
+
+
+#: A line that opens a list item: the marker is kept as written, and only
+#: what follows it is translated.
+_LIST_MARKER = re.compile(r"\s*(?:[-–—•*·▪]|\d{1,3}[.)])\s+")
+
+#: The line breaks of a text, with the whitespace around them.
+_LINE_BREAK = re.compile(r"(\s*\n\s*)")
+
+#: A line worth translating has a letter in it ("***" and "2025" do not).
+_LETTER = re.compile(r"[^\W\d_]")
+
+#: Lines of one text asked at the same time.
+LINES_AT_ONCE = 4
+
+
+def _lines_of(text: str) -> tuple[list[str], dict[int, tuple[str, str]]]:
+    """``text`` split at its line breaks — lines at even indices, the breaks
+    between them at odd — and the lines to translate, by index, as (list
+    marker kept as written, the rest)."""
+    parts = _LINE_BREAK.split(text)
+    lines: dict[int, tuple[str, str]] = {}
+    for i in range(0, len(parts), 2):
+        marker = _LIST_MARKER.match(parts[i])
+        prefix = marker.group(0) if marker else ""
+        if _LETTER.search(parts[i][len(prefix):]):
+            lines[i] = (prefix, parts[i][len(prefix):])
+    return parts, lines
 
 
 @dataclass
@@ -148,8 +182,44 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         An answer whose JSON will not parse is asked once more as tagged
         lines, and the cost is both calls'. A text long enough that its 23
         translations would not fit one answer goes out as several calls, a
-        share of the targets each (see `target_groups`).
+        share of the targets each (see `target_groups`). A text of several
+        lines goes a line at a time (see `_by_line`).
         """
+        if "\n" in text.strip():
+            return await self._by_line(text, source_lang, targets)
+        return await self._one_line(text, source_lang, targets)
+
+    async def _by_line(
+        self, text: str, source_lang: str, targets: list[str],
+    ) -> tuple[dict[str, str], float]:
+        """Each line of ``text`` translated on its own and put back where it
+        was, list markers and blank lines as written.
+
+        Asked for a text of several paragraphs at once, DeepSeek-V4-Flash
+        often translates the first and stops, in JSON and in tagged lines
+        alike: 46 of 518 lobbying goals with line breaks on 2026-10-09, and
+        asked again tagged 7 of those 46 still came back short. Sent a line
+        at a time, as every title is, with short lines asked again (see
+        `ask_short_again`), none of 96 such goals did — the 46 among them —
+        and all 2,162 translations kept their line breaks.
+        """
+        parts, lines = _lines_of(text)
+        at_once = asyncio.Semaphore(LINES_AT_ONCE)
+
+        async def one(line: str) -> tuple[dict[str, str], float]:
+            async with at_once:
+                return await self._one_line(line, source_lang, targets)
+
+        answers = await asyncio.gather(*(one(line) for _prefix, line in lines.values()))
+        out = {t: list(parts) for t in targets}
+        for i, (translations, _cost) in zip(lines, answers):
+            for t in targets:
+                out[t][i] = lines[i][0] + translations[t]        # the list marker, as written
+        return {t: "".join(p) for t, p in out.items()}, sum(cost for _t, cost in answers)
+
+    async def _one_line(
+        self, text: str, source_lang: str, targets: list[str],
+    ) -> tuple[dict[str, str], float]:
         groups = target_groups(len(text), targets)
         if len(groups) == 1:
             return await self._translate_once(text, source_lang, targets)
@@ -175,7 +245,23 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
             translations, cost = await self.translate_tagged_with_cost(text, source_lang, targets)
             return translations, self.actual_chat_usd(broken) + cost
         self._record_chat_spend(usage)
-        return translations, self.actual_chat_usd(usage)
+        translations, again = await self.ask_short_again(
+            text, source_lang, translations, "realtime")
+        return translations, self.actual_chat_usd(usage) + again
+
+    async def ask_short_again(
+        self, text: str, source_lang: str, translations: dict[str, str], path: str,
+    ) -> tuple[dict[str, str], float]:
+        """``translations`` with any that came back cut short (see
+        `cut_short`) asked for again as tagged lines, and what asking cost:
+        nothing when every one is whole. ``path`` (realtime or batch) is for
+        the metric."""
+        short = cut_short(text, translations)
+        if not short:
+            return translations, 0.0
+        TRANSLATION_SHORT_RETRIES.labels(path=path).inc()
+        again, cost = await self.translate_tagged_with_cost(text, source_lang, short)
+        return {**translations, **again}, cost
 
     async def translate_tagged_with_cost(
         self, text: str, source_lang: str, targets: list[str],

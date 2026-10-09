@@ -154,7 +154,7 @@ async def test_an_undetermined_source_asks_the_model_to_look():
 
     async def handler(request: httpx.Request) -> httpx.Response:
         seen["prompt"] = json.loads(request.content)["messages"][0]["content"]
-        return _completion({"en": "Wind turbine procurement", "mt": "x"})
+        return _completion({"en": "Wind turbine procurement", "mt": "Akkwist ta' turbini tar-riħ"})
 
     await _build(handler).translate("Anskaffelse av vindturbiner", "und", ["en", "mt"])
     assert "may equal the original text only for the language" in seen["prompt"]

@@ -97,6 +97,36 @@ def parse_translation_response(
     return {t: parsed[t] for t in targets}, (data.get("usage") or {})
 
 
+#: A translation under this share of its text's length was cut off, not
+#: written tersely: between the EU's languages one runs 0.8 to 1.3 times as
+#: long as its source.
+SHORT_SHARE = 0.5
+
+#: Below this many characters a length says nothing (an acronym, "Obras" as
+#: "Works"), so a short answer is taken as it is.
+JUDGED_FROM_CHARS = 20
+
+
+def cut_short(text: str, translations: dict[str, str]) -> list[str]:
+    """The targets whose translation is under half as long as ``text``.
+
+    DeepSeek-V4-Flash in JSON mode can end a translation early and still
+    answer valid JSON: it closes the string at a quote inside the text
+    (“financial stability objectives”) and goes on to the next language, or
+    it translates the first paragraph of several and stops. Nothing fails,
+    and the cut text would be stored as the translation: 46 of 518 lobbying
+    goals with line breaks, 2026-10-09. A line cut at a quote, asked again
+    as tagged lines, comes back whole; a text of several lines is sent a
+    line at a time besides (NebiusBackend._by_line). Whitespace is not
+    counted, so a text's blank lines do not make a translation that drops
+    them look short.
+    """
+    size = len(" ".join(text.split()))
+    if size < JUDGED_FROM_CHARS:
+        return []
+    return [t for t, v in translations.items() if len(" ".join(v.split())) < SHORT_SHARE * size]
+
+
 def build_tagged_translate_prompt(text: str, source_lang: str, targets: list[str]) -> str:
     """The same request with one ``<code>...</code>`` line back per target:
     what a text is asked again in when its JSON answer would not parse.
