@@ -41,6 +41,22 @@ class TranslationResult:
 
 
 @dataclass(frozen=True)
+class SummaryResult:
+    """A short summary in the language it was written in, and its machine
+    translations into the languages asked for."""
+
+    #: language -> summary; the summary's own language included.
+    summaries: dict[str, str]
+    #: The language the summary was written in: the source's, or English
+    #: when the source's is undetermined or not an EU language.
+    lang: str
+    backend: TranslationBackend
+    #: The summary itself came from the cache (its translations may have too).
+    cached: bool
+    cost_usd: float = 0.0
+
+
+@dataclass(frozen=True)
 class DetectionResult:
     """Each text's language as the model identified it, and at what price."""
 

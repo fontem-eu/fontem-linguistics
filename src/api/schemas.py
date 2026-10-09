@@ -47,6 +47,29 @@ class BatchTranslateResponse(BaseModel):
     results: list[TranslateResponse]
 
 
+class SummarizeRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=8192)
+    source_lang: str = Field(min_length=2, max_length=8)
+    #: Languages to translate the summary into, besides its own.
+    targets: list[str] = Field(default_factory=list, max_length=24)
+    #: A tweet is 280.
+    max_chars: int = Field(default=280, ge=80, le=1000)
+    #: What the summary should say, e.g. "what the organisation lobbies for".
+    about: str | None = Field(default=None, max_length=120)
+    backend: TranslationBackend = TranslationBackend.NEBIUS
+
+
+class SummarizeResponse(BaseModel):
+    #: The language the summary was written in (the source's, or English).
+    lang: str
+    #: language -> summary, its own language included.
+    summaries: dict[str, str]
+    #: The summary itself came from the cache.
+    cached: bool
+    backend: TranslationBackend
+    cost_usd: float = 0.0
+
+
 class DetectRequest(BaseModel):
     texts: list[str] = Field(min_length=1, max_length=256)
     backend: TranslationBackend = TranslationBackend.NEBIUS
@@ -130,6 +153,12 @@ class JobItemModel(BaseModel):
     text: str = Field(min_length=1, max_length=8192)
     source_lang: str = Field(min_length=2, max_length=8)
     targets: list[str] = Field(min_length=1, max_length=24)
+    #: "summarize": the item's result is a summary per language (its own
+    #: language included) instead of translations. A job with summaries
+    #: runs here, never as a provider batch.
+    task: Literal["translate", "summarize"] = "translate"
+    max_chars: int | None = Field(default=None, ge=80, le=1000)
+    about: str | None = Field(default=None, max_length=120)
 
 
 class JobSubmitRequest(BaseModel):

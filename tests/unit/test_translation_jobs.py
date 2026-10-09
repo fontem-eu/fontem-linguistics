@@ -22,6 +22,7 @@ from src.domain.models import (
     BackendUnavailable,
     CircuitOpen,
     SpendCapExceeded,
+    SummaryResult,
     TranslationBackend,
     TranslationResult,
 )
@@ -128,6 +129,14 @@ class FakeTranslation:
         self.mistral_spend_cap = SpendCap(daily_cap_usd=cap_usd)
         self.script = script or {}
         self.calls: list[str] = []
+        self.summarized: list[tuple] = []
+
+    async def summarize(  # pylint: disable=too-many-arguments
+            self, text, source_lang, targets, backend, *, max_chars, about):
+        self.summarized.append((text, source_lang, list(targets), max_chars, about))
+        return SummaryResult({source_lang: f"summary of {text}",
+                              **{t: f"summary of {text}@{t}" for t in targets if t != source_lang}},
+                             source_lang, backend, cached=False, cost_usd=0.0007)
 
     async def translate(self, *, text, source_lang, targets, backend):
         self.calls.append(text)
@@ -517,3 +526,43 @@ async def test_a_provider_job_caches_under_the_model_that_made_it():
     await jobs.status(job.job_id)
     key = "nebius:deepseek-ai/DeepSeek-V4-Flash-0731"
     assert translation.cache.puts == [("b", cache_source("pl"), key, {"en": "B-en", "de": "B-de"})]
+
+
+# ── Summaries ────────────────────────────────────────────────────
+
+
+def _summary_item(**over) -> JobItem:
+    values = {"id": "goals-1", "text": "Die Brauwirtschaft vertreten.", "source_lang": "de",
+              "targets": ["en", "fr"], "task": "summarize",
+              "about": "what the organisation lobbies for"}
+    values.update(over)
+    return JobItem(**values)
+
+
+async def test_a_summary_job_is_made_here_with_a_summary_per_language():
+    """A registrant's goals summarised: never sent as a provider batch (a
+    summary is written, then translated), and the item's result holds the
+    summary in its own language as well as in the others."""
+    api = ProviderApi()
+    translation = FakeTranslation(nebius=_nebius(api))
+    jobs, store = _jobs(translation, mode="auto")
+    job = await jobs.submit([_summary_item()], NEBIUS)
+    assert job.mode == "realtime" and not api.uploads
+    await _run_claimed(jobs)
+    done = store.jobs[job.job_id]
+    assert done.status == COMPLETED
+    (result,) = done.results
+    assert result.translations == {"de": "summary of Die Brauwirtschaft vertreten.",
+                                   "en": "summary of Die Brauwirtschaft vertreten.@en",
+                                   "fr": "summary of Die Brauwirtschaft vertreten.@fr"}
+    assert result.cost_usd == pytest.approx(0.0007)
+    assert translation.summarized == [("Die Brauwirtschaft vertreten.", "de", ["en", "fr"], 280,
+                                       "what the organisation lobbies for")]
+
+
+async def test_a_summary_cannot_be_forced_into_a_provider_batch():
+    jobs, _store = _jobs(FakeTranslation(nebius=_nebius(ProviderApi())), mode="auto")
+    with pytest.raises(ValueError, match="summaries"):
+        await jobs.submit([_summary_item()], NEBIUS, mode="provider")
+    with pytest.raises(ValueError, match="unknown task"):
+        await jobs.submit([_summary_item(task="paraphrase")], NEBIUS)

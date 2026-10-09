@@ -9,12 +9,13 @@ from loguru import logger
 from src.backends.mistral import MistralBackend, MistralError, MistralTransientError
 from src.backends.nebius import NebiusBackend, NebiusError, NebiusTransientError
 from src.backends.nllb_local import NllbLocalBackend
-from src.backends.openai_chat import UNDETERMINED
+from src.backends.openai_chat import LANG_FULLNAMES, UNDETERMINED
 from src.cache.postgres import PostgresCache
 from src.domain.models import (
     BackendUnavailable,
     CircuitOpen,
     DetectionResult,
+    SummaryResult,
     TranslationBackend,
     TranslationResult,
 )
@@ -40,6 +41,25 @@ LEGACY_NEBIUS_MODEL = "google/gemma-3-27b-it"
 def cache_source(source_lang: str) -> str:
     """The source-language component of the cache key."""
     return UNDETERMINED_CACHE_KEY if source_lang == UNDETERMINED else source_lang
+
+
+#: Bump when the summary prompt's wording changes: summaries are cached in
+#: the translations table under their own source key, and an old wording's
+#: summaries must not answer for the new one.
+SUMMARY_CACHE_TAG = "summary#1"
+
+
+def summary_cache_source(lang: str, max_chars: int, about: str | None) -> str:
+    """The source-language component of a summary's cache key: what the
+    summary was asked for (language, length, subject) rather than a source
+    language, so a summary never answers for a translation or another ask."""
+    return f"{SUMMARY_CACHE_TAG}:{lang}:{max_chars}:{about or ''}"
+
+
+def summary_language(source_lang: str) -> str:
+    """The language a summary is written in: the source's, or English when
+    the source's is undetermined or not one of the EU's."""
+    return source_lang if source_lang in LANG_FULLNAMES else "en"
 
 
 # The composition point for every translation path: one cache, and per
@@ -109,6 +129,69 @@ class TranslationService:  # pylint: disable=too-many-instance-attributes
             cached_targets=frozenset(cached.keys()),
             cost_usd=cost_usd,
         )
+
+    async def summarize(  # pylint: disable=too-many-arguments
+        self,
+        text: str,
+        source_lang: str,
+        targets: list[str],
+        backend: TranslationBackend,
+        *,
+        max_chars: int = 280,
+        about: str | None = None,
+    ) -> SummaryResult:
+        """A summary of at most ``max_chars`` characters in the source's
+        language, then machine-translated into ``targets`` the way any text
+        is (cache, breaker, budget; JSON with the tagged fallback). The
+        summary is cached too, so a second environment asking for the same
+        text pays nothing."""
+        if not text or not text.strip():
+            raise ValueError("text must be non-empty")
+        if backend is not TranslationBackend.NEBIUS:
+            raise ValueError("summaries are written by the nebius backend only")
+        lang = summary_language(source_lang)
+        summary, cost, cached = await self._summary(text, lang, max_chars, about, backend)
+        summaries = {lang: summary}
+        others = [t for t in targets if t != lang]
+        if others:
+            translated = await self.translate(summary, lang, others, backend)
+            summaries.update(translated.translations)
+            cost += translated.cost_usd
+        return SummaryResult(summaries=summaries, lang=lang, backend=backend,
+                             cached=cached, cost_usd=cost)
+
+    async def _summary(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self, text: str, lang: str, max_chars: int, about: str | None,
+        backend: TranslationBackend,
+    ) -> tuple[str, float, bool]:
+        """(the summary in ``lang``, what writing it cost, whether the cache had it)."""
+        key, cache_key = summary_cache_source(lang, max_chars, about), self.cache_backend(backend)
+        hit = await self.cache.get_translations(text, key, [lang], cache_key)
+        if lang in hit:
+            return hit[lang], 0.0, True
+        summary, cost = await self._call_nebius_summary(text, lang, max_chars, about)
+        await self.cache.put_translations(text, key, cache_key, {lang: summary})
+        return summary, cost, False
+
+    async def _call_nebius_summary(self, text: str, lang: str, max_chars: int,
+                                   about: str | None) -> tuple[str, float]:
+        """Breaker, reserve, call, settle — as for a translation."""
+        if self.nebius is None or self.nebius_breaker is None or self.nebius_spend_cap is None:
+            raise BackendUnavailable("nebius backend not configured")
+        if not await self.nebius_breaker.allow():
+            raise CircuitOpen("nebius circuit breaker is open")
+        estimate = self.nebius.estimate_chat_usd(len(text), 2)
+        await self.nebius_spend_cap.reserve(estimate)
+        try:
+            summary, actual = await self.nebius.summarize_with_cost(text, lang, max_chars, about)
+        except (NebiusTransientError, NebiusError) as exc:
+            await self.nebius_breaker.record_failure()
+            await self.nebius_spend_cap.release(estimate)
+            logger.warning("nebius summarize failure: {}", exc)
+            raise
+        await self.nebius_spend_cap.finalize(estimate, actual)
+        await self.nebius_breaker.record_success()
+        return summary, actual
 
     def cache_backend(self, backend: TranslationBackend) -> str:
         """The backend component of the cache key. For Nebius it names the

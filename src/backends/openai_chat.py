@@ -195,6 +195,65 @@ def parse_tagged_translation_response(
     return translations, (data.get("usage") or {})
 
 
+#: What a summary says when the caller does not say what it should.
+DEFAULT_SUMMARY_ABOUT = "what the text is about"
+
+
+def build_summarize_prompt(text: str, lang: str, max_chars: int, about: str | None = None) -> str:
+    """One summary, in ``lang``, of at most ``max_chars`` characters.
+
+    Judged on 48 real texts before it shipped (2026-10-09: lobbying
+    registrants' goals in seven languages, ECI objectives): faithful,
+    written in the requested language, organisation names kept; 5 of 48
+    ran over 280 characters, which is why `summary_overshoot_prompt` exists.
+    """
+    return (
+        f"Summarise the text below in {lang_fullname(lang)}, in at most {max_chars} "
+        f"characters, as one or two plain sentences saying {about or DEFAULT_SUMMARY_ABOUT}. "
+        "Keep the names of organisations, programmes and laws as written. Write only the "
+        "summary: no title, no preamble, no quotation marks, no hashtags, no emoji.\n"
+        f"Text: {text}"
+    )
+
+
+def summary_overshoot_prompt(summary: str, max_chars: int) -> str:
+    """Ask again for a summary that came back too long."""
+    return (
+        f"This summary is {len(summary)} characters long. Rewrite it in at most {max_chars} "
+        "characters, in the same language, keeping what matters most. Write only the "
+        f"summary.\nSummary: {summary}"
+    )
+
+
+#: Quotation marks a model wraps a summary in although asked not to.
+_WRAPPING_QUOTES = "\"'“”„«»‘’"
+
+
+def clean_summary(content: str) -> str:
+    """The summary as one line: whitespace collapsed, a ``Summary:`` label
+    and wrapping quotation marks removed."""
+    text = " ".join((content or "").split())
+    for label in ("Summary:", "Résumé :", "Zusammenfassung:", "Resumen:", "Riassunto:"):
+        if text.startswith(label):
+            text = text[len(label):].strip()
+    if len(text) >= 2 and text[0] in _WRAPPING_QUOTES and text[-1] in _WRAPPING_QUOTES:
+        text = text[1:-1].strip()
+    return text
+
+
+def fit_summary(text: str, max_chars: int) -> str:
+    """``text`` cut to ``max_chars`` at the last sentence that fits, else at
+    a word, with an ellipsis. A text that fits is returned as it is."""
+    if len(text) <= max_chars:
+        return text
+    head = text[:max_chars]
+    sentence_end = max(head.rfind(". "), head.rfind("! "), head.rfind("? "))
+    if sentence_end >= max_chars // 2:
+        return head[:sentence_end + 1]
+    word = head[:max_chars - 1].rsplit(" ", 1)[0].rstrip(",;:—-")
+    return word + "…"
+
+
 #: What a detection may answer: a two-letter ISO 639-1 code, or "und".
 _LANG_CODE = re.compile(r"^(?:[a-z]{2}|und)$")
 

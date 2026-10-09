@@ -16,6 +16,7 @@ in the right language with the right register.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 
@@ -23,13 +24,17 @@ import httpx
 
 from src.backends.openai_chat import (
     build_detect_prompt,
+    build_summarize_prompt,
     build_tagged_translate_prompt,
     build_translate_prompt,
+    clean_summary,
+    fit_summary,
     parse_detect_response,
     parse_tagged_translation_response,
     parse_translation_response,
     post_with_retries,
     price_usd,
+    summary_overshoot_prompt,
 )
 from src.infra.metrics import LLM_SPEND_USD, TRANSLATION_TAGGED_RETRIES
 
@@ -54,6 +59,25 @@ class NebiusBatchRefused(NebiusError):
 
 #: Batch states in which the provider is still working.
 BATCH_WORKING = frozenset({"validating", "in_progress", "finalizing", "cancelling"})
+
+
+#: Output a single answer may carry: under the 8,192 tokens an answer is cut
+#: at, with room for the model running long.
+OUTPUT_TOKEN_BUDGET = 6_000
+
+
+def target_groups(text_chars: int, targets: list[str]) -> list[list[str]]:
+    """``targets`` split so each call's answer fits OUTPUT_TOKEN_BUDGET.
+
+    Measured 2026-10-05 on DeepSeek-V4-Flash: an answer runs about 0.37
+    tokens per source character per target, Greek and Bulgarian highest,
+    plus the tags around it. A 1,000-character lobbying goal into 23
+    languages is ~8,700 tokens — past the cut — so it goes as two calls.
+    A title stays one call.
+    """
+    per_target = 12 + 0.45 * text_chars
+    size = max(1, int(OUTPUT_TOKEN_BUDGET // per_target))
+    return [targets[i:i + size] for i in range(0, len(targets), size)] or [targets]
 
 
 @dataclass
@@ -122,8 +146,23 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         which is the difference between a budget and a guess.
 
         An answer whose JSON will not parse is asked once more as tagged
-        lines, and the cost is both calls'.
+        lines, and the cost is both calls'. A text long enough that its 23
+        translations would not fit one answer goes out as several calls, a
+        share of the targets each (see `target_groups`).
         """
+        groups = target_groups(len(text), targets)
+        if len(groups) == 1:
+            return await self._translate_once(text, source_lang, targets)
+        answers = await asyncio.gather(*(self._translate_once(text, source_lang, g)
+                                         for g in groups))
+        merged: dict[str, str] = {}
+        for translations, _cost in answers:
+            merged.update(translations)
+        return merged, sum(cost for _t, cost in answers)
+
+    async def _translate_once(
+        self, text: str, source_lang: str, targets: list[str],
+    ) -> tuple[dict[str, str], float]:
         data = await self._chat(self.translate_payload(text, source_lang, targets))
         try:
             translations, usage = parse_translation_response(data, targets, NebiusError)
@@ -149,6 +188,34 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         self._record_chat_spend(usage)      # spent whether or not the answer reads
         translations, _usage = parse_tagged_translation_response(data, targets, NebiusError)
         return translations, self.actual_chat_usd(usage)
+
+    async def summarize_with_cost(
+        self, text: str, lang: str, max_chars: int, about: str | None = None,
+    ) -> tuple[str, float]:
+        """A summary of ``text`` in ``lang`` of at most ``max_chars``
+        characters, and what it cost. One that comes back too long is asked
+        to shorten itself once; one still too long is cut at the last
+        sentence that fits."""
+        data = await self._chat(self._chat_payload(
+            build_summarize_prompt(text, lang, max_chars, about), json_mode=False))
+        summary, cost = self._summary_of(data)
+        if len(summary) > max_chars:
+            data = await self._chat(self._chat_payload(
+                summary_overshoot_prompt(summary, max_chars), json_mode=False))
+            shorter, extra = self._summary_of(data)
+            summary, cost = (shorter or summary), cost + extra
+        return fit_summary(summary, max_chars), cost
+
+    def _summary_of(self, data: dict) -> tuple[str, float]:
+        usage = data.get("usage") or {}
+        self._record_chat_spend(usage)
+        try:
+            summary = clean_summary(data["choices"][0]["message"]["content"])
+        except (KeyError, IndexError, TypeError) as exc:
+            raise NebiusError(f"malformed chat response: {exc}") from exc
+        if not summary:
+            raise NebiusError("empty summary")
+        return summary, self.actual_chat_usd(usage)
 
     def translate_payload(self, text: str, source_lang: str, targets: list[str],
                           tagged: bool = False) -> dict:

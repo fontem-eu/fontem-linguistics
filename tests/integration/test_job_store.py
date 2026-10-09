@@ -59,6 +59,24 @@ async def test_a_job_round_trips_with_its_items_and_prefilled_results(store):
     assert await store.get("nope") is None
 
 
+async def test_a_summary_item_round_trips_and_an_older_item_loads_as_a_translation(store):
+    """Items are stored as JSON: a summary keeps what it asked for, and a
+    row written before summaries existed comes back as a translation."""
+    job = _job("s1")
+    job.items = [JobItem("g", "Brauer vertreten.", "de", ["en"], task="summarize",
+                         max_chars=200, about="what the organisation lobbies for")]
+    await store.insert(job)
+    got = (await store.get("s1")).items[0]
+    assert (got.task, got.max_chars, got.about) == ("summarize", 200,
+                                                     "what the organisation lobbies for")
+    async with store.pool.acquire() as con:
+        await con.execute(
+            """UPDATE translation_jobs SET items = '[{"id": "1", "text": "Roboty",
+               "source_lang": "pl", "targets": ["en"]}]'::jsonb WHERE job_id = 's1'""")
+    old = (await store.get("s1")).items[0]
+    assert (old.task, old.max_chars, old.about) == ("translate", None, None)
+
+
 async def test_a_realtime_job_is_claimed_once_until_its_claim_lapses(store):
     await store.insert(_job("r1"))
     await store.insert(_job("p1", mode="provider"))           # never claimed: not realtime
