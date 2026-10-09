@@ -86,12 +86,9 @@ def target_groups(text_chars: int, targets: list[str]) -> list[list[str]]:
     return [targets[i:i + size] for i in range(0, len(targets), size)] or [targets]
 
 
-#: A line that opens a list item: the marker is kept as written, and only
-#: what follows it is translated.
-_LIST_MARKER = re.compile(r"\s*(?:[-–—•*·▪]|\d{1,3}[.)])\s+")
-
-#: The line breaks of a text, with the whitespace around them.
-_LINE_BREAK = re.compile(r"(\s*\n\s*)")
+#: A list item's marker: kept as written with the space after it, and only
+#: what follows is translated.
+_LIST_MARKER = re.compile(r"(?:[-–—•*·▪]|\d{1,3}[.)])\s+")
 
 #: A line worth translating has a letter in it ("***" and "2025" do not).
 _LETTER = re.compile(r"[^\W\d_]")
@@ -100,18 +97,20 @@ _LETTER = re.compile(r"[^\W\d_]")
 LINES_AT_ONCE = 4
 
 
-def _lines_of(text: str) -> tuple[list[str], dict[int, tuple[str, str]]]:
-    """``text`` split at its line breaks — lines at even indices, the breaks
-    between them at odd — and the lines to translate, by index, as (list
-    marker kept as written, the rest)."""
-    parts = _LINE_BREAK.split(text)
-    lines: dict[int, tuple[str, str]] = {}
-    for i in range(0, len(parts), 2):
-        marker = _LIST_MARKER.match(parts[i])
-        prefix = marker.group(0) if marker else ""
-        if _LETTER.search(parts[i][len(prefix):]):
-            lines[i] = (prefix, parts[i][len(prefix):])
-    return parts, lines
+def _lines_of(text: str) -> tuple[list[str], dict[int, tuple[str, str, str]]]:
+    """``text`` split at its line breaks, and the lines to translate, by
+    index, as (what comes before the words — indentation, a list marker —
+    the words, the whitespace after them), so that only the words change."""
+    rows = text.split("\n")
+    lines: dict[int, tuple[str, str, str]] = {}
+    for i, row in enumerate(rows):
+        start, end = len(row) - len(row.lstrip()), len(row.rstrip())
+        marker = _LIST_MARKER.match(row, start, end)
+        if marker:
+            start = marker.end()
+        if _LETTER.search(row, start, end):
+            lines[i] = (row[:start], row[start:end], row[end:])
+    return rows, lines
 
 
 @dataclass
@@ -203,19 +202,19 @@ class NebiusBackend:  # pylint: disable=too-many-instance-attributes
         `ask_short_again`), none of 96 such goals did — the 46 among them —
         and all 2,162 translations kept their line breaks.
         """
-        parts, lines = _lines_of(text)
+        rows, lines = _lines_of(text)
         at_once = asyncio.Semaphore(LINES_AT_ONCE)
 
         async def one(line: str) -> tuple[dict[str, str], float]:
             async with at_once:
                 return await self._one_line(line, source_lang, targets)
 
-        answers = await asyncio.gather(*(one(line) for _prefix, line in lines.values()))
-        out = {t: list(parts) for t in targets}
+        answers = await asyncio.gather(*(one(words) for _head, words, _tail in lines.values()))
+        out = {t: list(rows) for t in targets}
         for i, (translations, _cost) in zip(lines, answers):
             for t in targets:
-                out[t][i] = lines[i][0] + translations[t]        # the list marker, as written
-        return {t: "".join(p) for t, p in out.items()}, sum(cost for _t, cost in answers)
+                out[t][i] = lines[i][0] + translations[t] + lines[i][2]
+        return {t: "\n".join(r) for t, r in out.items()}, sum(cost for _t, cost in answers)
 
     async def _one_line(
         self, text: str, source_lang: str, targets: list[str],
